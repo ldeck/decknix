@@ -4,6 +4,7 @@
 // writes per-adapter JSON files to ~/.config/decknix/hub/.
 // Emacs, CLI, and other consumers read those files (file-notify for live updates).
 
+mod chores;
 mod jira;
 mod kargo;
 mod quota;
@@ -95,6 +96,7 @@ struct HubConfig {
     jira: jira::JiraConfig,
     teamcity: teamcity::TeamCityConfig,
     kargo: kargo::KargoConfig,
+    chores: chores::ChoresConfig,
     quotas: quota::QuotaConfig,
 }
 
@@ -112,6 +114,8 @@ struct GitHubConfig {
     /// typical merge-to-production window; a slow deploy that outruns it
     /// drops the row before it ships.
     wip_merged_retention_days: u64,
+    /// Seconds between polls of open issues assigned to me; 0 disables.
+    issues_interval_secs: u64,
 }
 
 impl Default for HubConfig {
@@ -121,6 +125,7 @@ impl Default for HubConfig {
             jira: jira::JiraConfig::default(),
             teamcity: teamcity::TeamCityConfig::default(),
             kargo: kargo::KargoConfig::default(),
+            chores: chores::ChoresConfig::default(),
             quotas: quota::QuotaConfig::default(),
         }
     }
@@ -141,6 +146,7 @@ impl Default for GitHubConfig {
             // merged query (50 rows, most recent first) inside the window:
             // at 30 days one author already had 94 merges.
             wip_merged_retention_days: 7,
+            issues_interval_secs: 300,
         }
     }
 }
@@ -2614,6 +2620,72 @@ fn wip_cache_ttl(state: &str) -> Duration {
 }
 
 // ---------------------------------------------------------------------------
+// GitHub issues assigned to me
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct IssueItem {
+    repo: String,
+    number: u64,
+    title: String,
+    url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    labels: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct IssuesFile {
+    updated: DateTime<Utc>,
+    items: Vec<IssueItem>,
+}
+
+/// Issues from `gh search issues --json number,title,url,repository,updatedAt,labels`.
+fn parse_issues(json: &str) -> Result<Vec<IssueItem>, String> {
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("parse issues: {e}"))?;
+    Ok(v.as_array().into_iter().flatten().filter_map(|i| Some(IssueItem {
+        repo: i.pointer("/repository/nameWithOwner")?.as_str()?.to_string(),
+        number: i.get("number")?.as_u64()?,
+        title: i.get("title")?.as_str()?.to_string(),
+        url: i.get("url")?.as_str()?.to_string(),
+        updated: i.get("updatedAt").and_then(|u| u.as_str()).map(str::to_string),
+        labels: i.get("labels").and_then(|l| l.as_array()).into_iter().flatten()
+            .filter_map(|l| l.get("name").and_then(|n| n.as_str()).map(str::to_string)).collect(),
+    })).collect())
+}
+
+async fn poll_github_issues() -> Result<IssuesFile, String> {
+    let out = gh_json(&[
+        "search", "issues", "--assignee=@me", "--state=open", "--archived=false",
+        "--sort=updated", "--order=desc",
+        "--json", "number,title,url,repository,updatedAt,labels", "--limit", "50",
+    ]).await?;
+    Ok(IssuesFile { updated: Utc::now(), items: parse_issues(&out)? })
+}
+
+async fn run_issues_adapter(interval_secs: u64, dir: PathBuf, meta: SharedMeta, once: bool) {
+    let interval = Duration::from_secs(interval_secs.max(60));
+    loop {
+        let last_error = match poll_github_issues().await {
+            Ok(data) => match atomic_write_json(&dir, "github-issues.json", &data).await {
+                Ok(()) => { eprintln!("hub: github-issues: {} items", data.items.len()); None }
+                Err(e) => Some(format!("write error: {e}")),
+            },
+            Err(e) => { eprintln!("hub: github-issues error: {e}"); Some(e) }
+        };
+        update_meta(&meta, AdapterStatus {
+            name: "github-issues".into(),
+            last_poll: Some(Utc::now()),
+            ok: last_error.is_none(),
+            last_error,
+        }, &dir).await;
+        if once { return; }
+        tokio::time::sleep(interval).await;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Adapter runner — independent async task per adapter
 // ---------------------------------------------------------------------------
 
@@ -2771,11 +2843,22 @@ async fn main() {
                 wip_interval_secs: gh_cfg.wip_interval_secs,
                 review_repos: gh_cfg.review_repos.clone(),
                 wip_merged_retention_days: gh_cfg.wip_merged_retention_days,
+                issues_interval_secs: gh_cfg.issues_interval_secs,
             },
             dir.clone(),
             meta.clone(),
             cli.once,
         )));
+
+        if gh_cfg.issues_interval_secs > 0 {
+            eprintln!("hub: github-issues adapter: every {}s", gh_cfg.issues_interval_secs);
+            handles.push(tokio::spawn(run_issues_adapter(
+                gh_cfg.issues_interval_secs,
+                dir.clone(),
+                meta.clone(),
+                cli.once,
+            )));
+        }
 
         handles.push(tokio::spawn(run_wip_adapter(
             gh_cfg,
@@ -2788,7 +2871,7 @@ async fn main() {
     // Spawn Jira adapter
     if config.jira.enabled {
         eprintln!("hub: jira-tasks adapter: every {}s", config.jira.interval_secs);
-        eprintln!("hub: jira project: {}", config.jira.project);
+        eprintln!("hub: jira projects: {:?} (settings.toml [hub.jira] overrides)", config.jira.projects);
         handles.push(tokio::spawn(jira::run_jira_adapter(
             config.jira,
             dir.clone(),
@@ -2803,6 +2886,17 @@ async fn main() {
         eprintln!("hub: teamcity proxy: {}", config.teamcity.proxy_url);
         handles.push(tokio::spawn(teamcity::run_teamcity_adapter(
             config.teamcity,
+            dir.clone(),
+            meta.clone(),
+            cli.once,
+        )));
+    }
+
+    if config.chores.enabled {
+        eprintln!("hub: task-chores adapter: every {}s ({})",
+                  config.chores.interval_secs, config.chores.filter);
+        handles.push(tokio::spawn(chores::run_chores_adapter(
+            config.chores,
             dir.clone(),
             meta.clone(),
             cli.once,
@@ -2854,6 +2948,17 @@ async fn main() {
 #[cfg(test)]
 mod wip_query_tests {
     use super::*;
+
+    #[test]
+    fn issues_parse_from_gh_search() {
+        let json = r#"[{"number": 4, "title": "t", "url": "u", "updatedAt": "2026-11-19T00:00:00Z",
+                        "repository": {"name": "r", "nameWithOwner": "o/r"},
+                        "labels": [{"name": "bug"}]}, {"number": 5}]"#;
+        let items = parse_issues(json).unwrap();
+        assert_eq!(items, vec![IssueItem { repo: "o/r".into(), number: 4, title: "t".into(),
+                                           url: "u".into(), updated: Some("2026-11-19T00:00:00Z".into()),
+                                           labels: vec!["bug".into()] }]);
+    }
 
     #[test]
     fn merged_query_uses_merged_flag_not_state() {

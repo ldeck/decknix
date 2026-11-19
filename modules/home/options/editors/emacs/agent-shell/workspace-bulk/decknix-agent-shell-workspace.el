@@ -51,6 +51,7 @@
 ;; per-feature bulk modules (main, hub, context).
 (declare-function decknix-support-dashboard "decknix-support-dashboard")
 (declare-function decknix-ship-retention-label "decknix-ship" (seconds))
+(declare-function decknix-layout-chore-info "decknix-sidebar-tasks" (uuid))
 (declare-function decknix-ship-set-retention "decknix-ship" (seconds))
 (defvar decknix-sidebar-shipped-retention)
 (declare-function decknix-support-workflow "decknix-support-workflow")
@@ -5807,6 +5808,13 @@ directly — see `decknix-sidebar-primary-action'."
      ;; A sub-agent row: what it was asked to do and what it last said.
      ((and subagent (fboundp 'decknix-layout-subagent-show))
       (decknix-layout-subagent-show subagent))
+     ;; Tasks rows that are not Jira issues: an issue opens, a chore
+     ;; shows its `task info'.
+     ((and (eq type 'issue) (alist-get 'decknix-hub-url ctx))
+      (decknix--open-url (alist-get 'decknix-hub-url ctx)))
+     ((and (eq type 'chore) (fboundp 'decknix-layout-chore-info))
+      (decknix-layout-chore-info (get-text-property (line-beginning-position)
+                                                    'decknix-layout-chore)))
      ;; A held-items row: the only thing on it is "show the rest".
      ((and expand-key (fboundp 'decknix-layout-toggle-expand))
       (call-interactively #'decknix-layout-toggle-expand))

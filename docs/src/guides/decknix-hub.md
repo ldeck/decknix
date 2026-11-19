@@ -80,6 +80,43 @@ cat ~/.config/decknix/hub/meta.json
 | `decknix.services.hub.github.mergedRetentionDays` | `7` | Days a merged PR stays in the WIP feed (the 50 most recent merges); the sidebar drops it sooner once shipped |
 | `decknix.services.hub.github.reviewRepos` | `[]` | Repos to check (empty = all) |
 
+#### Jira projects
+
+With `projects` set, the adapter runs two queries per poll:
+
+- assigned to me: `project in (...) AND assignee = currentUser() AND statusCategory != Done`
+  (written to `items`);
+- to pick up: `project in (...) AND assignee is EMPTY AND statusCategory = "To Do" AND sprint in openSprints()`
+  (written to `pick_up`). A project with no sprints contributes nothing; a
+  failed query is listed in `errors` and the rest of the file is kept.
+
+The project list can be changed without a rebuild or restart:
+
+```bash
+decknix hub jira-projects                # show the current override
+decknix hub jira-projects ABC XYZ        # or ABC,XYZ; written to settings.toml
+decknix hub jira-projects --clear        # back to the Nix-configured list
+```
+
+That edits `[hub.jira] projects` in `~/.config/decknix/settings.toml`
+(keeping the rest of the file), which the daemon re-reads on every Jira poll.
+An org overlay sets the default with
+`decknix.services.hub.jira.projects = lib.mkDefault [ ... ];`, and its
+bootstrap can ask for the list at install time and write the same table.
+
+#### GitHub issues and chores
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `decknix.services.hub.github.issuesInterval` | `300` | Seconds between polls of open issues assigned to me (`github-issues.json`); 0 disables |
+| `decknix.services.hub.chores.enable` | `false` | Pending Taskwarrior chores (`task-chores.json`) |
+| `decknix.services.hub.chores.filter` | `"+chore status:pending"` | Taskwarrior filter |
+| `decknix.services.hub.chores.excludeProjects` | `["decknix.perf"]` | Projects (and sub-projects) left out |
+| `decknix.services.hub.chores.interval` | `120` | Seconds between polls |
+
+Chores are read with `task rc.gc=off rc.hooks=off ... export`, so a poll
+never renumbers or rewrites anything.
+
 #### Kargo
 
 Which deploy stages hold each of your merged PRs, for repos that ship through
@@ -122,8 +159,10 @@ sidebar shows those PRs as pending with a `WIP feed partial: kargo: ...` line.
 | `decknix.services.hub.jira.baseUrl` | `""` | Jira base URL (e.g. `https://myorg.atlassian.net`) |
 | `decknix.services.hub.jira.email` | `""` | User email for API auth (typically wired from `config.<org>.user.email`) |
 | `decknix.services.hub.jira.apiTokenFile` | `~/.config/decknix/local/jira-token` | Path to Jira API token file |
-| `decknix.services.hub.jira.project` | `""` | Jira project key (e.g. `NC`) |
-| `decknix.services.hub.jira.statuses` | `["Ready" "In Progress" "Blocked" "Code Review"]` | Statuses to poll |
+| `decknix.services.hub.jira.projects` | `[]` | Jira project keys for the Tasks section; overridden at runtime by `[hub.jira] projects` in `~/.config/decknix/settings.toml` (see below) |
+| `decknix.services.hub.jira.pickUp` | `true` | Also list unassigned To Do issues in open sprints |
+| `decknix.services.hub.jira.project` | `""` | Legacy single project key, used only when `projects` is empty |
+| `decknix.services.hub.jira.statuses` | `["Ready" "In Progress" "Blocked" "Code Review"]` | Statuses for the legacy single-project query only |
 | `decknix.services.hub.jira.interval` | `120` | Seconds between polls |
 | `decknix.services.hub.jira.maxResults` | `50` | Max tasks per poll |
 
@@ -188,18 +227,28 @@ TeamCity running builds show progress percentage.
 
 ### Tasks
 
-Jira tasks assigned to you, grouped by status:
+What there is to do, in four collapsible groups, each capped at
+`decknix-sidebar-tasks-per-group` rows (default 5) with the rest named:
 
 ```
- Tasks (4)
-  ● MAIN-1234 In Progress  Implement hub daemon
-  ◐ MAIN-1235 Code Review  Fix payment widget
-  ✕ MAIN-1236 Blocked      Waiting for API access
-  ○ MAIN-1237 Ready        Update documentation
+ Tasks (14)
+ ▾ In progress (6)
+   ● ABC-1610 Ship the importer            ← a live session works it
+   · ABC-1588 Tidy the schema              ← colour: amber doing, purple review, red blocked
+     … 1 more
+ ▾ To pick up (5)
+   · XYZ-42 Rotate the key                 ← unassigned To Do in an open sprint
+ ▾ Chores (2)
+   ◦ 4 Renew the certificate
+ ▾ Issues (1)
+   · widget#12 Fix the flaky test
 ```
 
-Status icons: `●` In Progress, `◐` Code Review, `✕` Blocked, `○` Ready.
-Press `RET` on a task to open it in Jira.
+A session works a key when the key is in its name or tags, or in the title or
+branch of a PR it owns; those rows come first. `RET` on a Jira row opens the
+task menu (open, browser, start a session); on an issue it opens the issue;
+on a chore it shows `task info` (fetched in a child process). `TAB` on a group
+header collapses it; `RET` on `… N more` lists the rest.
 
 ### Org Filter (`O`)
 
@@ -274,7 +323,9 @@ All state is stored in `~/.config/decknix/hub/`:
 |------|---------|
 | `github-reviews.json` | PR reviews needing your attention (per-PR attention signals — `my_review`, `others_reviewed`, `re_requested`, `comment_mentioned`, `review_stale`, `review_decision` — drive the sidebar's [reviewed filter](../modules/ai/agent-shell/layouts/requests.md#the-reviewed-filter-r)) |
 | `github-wip.json` | Your open PRs, and merged ones within `mergedRetentionDays`, with CI status and branches. `state` is upper case (`OPEN`, `MERGED`). `errors` lists queries that failed this poll without failing it |
-| `jira-tasks.json` | Jira tasks assigned to you |
+| `jira-tasks.json` | Jira issues assigned to you and not Done (`items`), to pick up (`pick_up`), the `projects` used, and `errors` |
+| `github-issues.json` | Open GitHub issues assigned to you |
+| `task-chores.json` | Pending Taskwarrior chores |
 | `teamcity-builds.json` | TeamCity build status for WIP branches |
 | `kargo-stages.json` | Per merged PR in a Kargo repo: `stages`, `reached` (holding the merge, verified), `promoting`, `failed`, and `verified_at` once the last stage verified it; `errors` when kargo failed |
 | `meta.json` | Adapter health: last poll time, errors |

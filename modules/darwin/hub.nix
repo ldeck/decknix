@@ -14,6 +14,7 @@ let
       wip_interval_secs = cfg.github.wipInterval;
       review_repos = cfg.github.reviewRepos;
       wip_merged_retention_days = cfg.github.mergedRetentionDays;
+      issues_interval_secs = cfg.github.issuesInterval;
     };
     jira = {
       enabled = cfg.jira.enable;
@@ -22,8 +23,16 @@ let
       email = cfg.jira.email;
       api_token_file = cfg.jira.apiTokenFile;
       project = cfg.jira.project;
+      projects = cfg.jira.projects;
+      pick_up = cfg.jira.pickUp;
       statuses = cfg.jira.statuses;
       max_results = cfg.jira.maxResults;
+    };
+    chores = {
+      enabled = cfg.chores.enable;
+      interval_secs = cfg.chores.interval;
+      filter = cfg.chores.filter;
+      exclude_projects = cfg.chores.excludeProjects;
     };
     kargo = {
       enabled = cfg.kargo.enable;
@@ -110,6 +119,15 @@ in
           recent merges, so a much longer window adds nothing.
         '';
       };
+
+      issuesInterval = mkOption {
+        type = types.int;
+        default = 300;
+        description = ''
+          Seconds between polls of open GitHub issues assigned to me
+          (github-issues.json, the sidebar Tasks section).  0 disables.
+        '';
+      };
     };
 
     jira = {
@@ -151,7 +169,26 @@ in
       project = mkOption {
         type = types.str;
         default = "";
-        description = "Jira project key for filtering (e.g. NC). Empty = all projects.";
+        description = "Legacy single Jira project key, used only when `projects` is empty.";
+      };
+
+      projects = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        example = [ "ABC" "XYZ" ];
+        description = ''
+          Jira project keys the sidebar Tasks section lists: issues assigned to
+          me that are not Done, and unassigned To Do issues in an open sprint.
+          `[hub.jira] projects` in ~/.config/decknix/settings.toml overrides
+          this at runtime (set it with `decknix hub jira-projects KEY...`); the
+          hub re-reads it on every poll, so no rebuild is needed.
+        '';
+      };
+
+      pickUp = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Also list unassigned To Do issues in open sprints of `projects`.";
       };
 
       statuses = mkOption {
@@ -164,6 +201,39 @@ in
         type = types.int;
         default = 50;
         description = "Maximum number of Jira tasks to fetch per poll.";
+      };
+    };
+
+    chores = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Enable the chores adapter: pending Taskwarrior tasks matching
+          `filter`, written to task-chores.json for the sidebar Tasks section.
+          Read-only (`task rc.gc=off rc.hooks=off ... export`).
+        '';
+      };
+
+      interval = mkOption {
+        type = types.int;
+        default = 120;
+        description = "Seconds between chores polls (minimum 30).";
+      };
+
+      filter = mkOption {
+        type = types.str;
+        default = "+chore status:pending";
+        description = "Taskwarrior filter selecting chores.";
+      };
+
+      excludeProjects = mkOption {
+        type = types.listOf types.str;
+        default = [ "decknix.perf" ];
+        description = ''
+          Projects (and their sub-projects) left out, such as the perf-hitch
+          auto-filer's findings.
+        '';
       };
     };
 

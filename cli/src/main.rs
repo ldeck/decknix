@@ -15,6 +15,7 @@ mod session_archive;
 mod repo_sync;
 mod wt_finished;
 mod emacs_cycle;
+mod hub_settings;
 
 // 1. Static Core Commands
 #[derive(Parser)]
@@ -79,6 +80,11 @@ enum Commands {
     Repos {
         #[command(subcommand)]
         action: repo_sync::RepoAction,
+    },
+    /// Settings the decknix-hub daemon reads at runtime (no rebuild needed)
+    Hub {
+        #[command(subcommand)]
+        action: hub_settings::HubAction,
     },
     /// Pull local changes to agent skills/commands back into repositories
     PullLocalChanges {
@@ -2325,6 +2331,9 @@ fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Repos { action }) => {
             repo_sync::run(action)?;
+        }
+        Some(Commands::Hub { action }) => {
+            hub_settings::run(action)?;
         }
         Some(Commands::External(args)) => {
             let cmd_name = &args[0];

@@ -18,6 +18,7 @@ Commands:
   wt                  Manage git worktrees
   session             Find, create, and resume Claude sessions (workspace + tag aware)
   repos               Keep local clones fresh: fetch + fast-forward each repo's default branch
+  hub                 Settings the decknix-hub daemon reads at runtime (no rebuild needed)
   pull-local-changes  Pull local changes to agent skills/commands back into repositories
   help
 
@@ -864,6 +865,40 @@ Options:
 
       --json
 
+
+  -h, --help
+          Print help
+```
+
+## `decknix hub`
+
+```text
+Settings the decknix-hub daemon reads at runtime (no rebuild needed)
+
+Usage: decknix hub <COMMAND>
+
+Commands:
+  jira-projects  Show or set the Jira project keys the Tasks section lists
+
+Options:
+  -h, --help
+          Print help
+```
+
+## `decknix hub jira-projects`
+
+```text
+Show or set the Jira project keys the Tasks section lists
+
+Usage: decknix hub jira-projects [OPTIONS] [KEYS]...
+
+Arguments:
+  [KEYS]...
+          Project keys (space- or comma-separated); omit to show the current value
+
+Options:
+      --clear
+          Remove the override and go back to the Nix-configured default
 
   -h, --help
           Print help

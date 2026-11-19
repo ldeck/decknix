@@ -2156,6 +2156,17 @@ let
     testFiles = [ "decknix-sidebar-layout-render-test.el" ];
   };
 
+  # The Tasks section: Jira in progress and to pick up, chores and issues,
+  # from the hub feeds, joined to the live session working each key.
+  decknix-sidebar-tasks-el = mkEmacsTestedPackage {
+    pname = "decknix-sidebar-tasks";
+    src = ./agent-shell/sidebar-layout;
+    packageRequires = [ decknix-sidebar-layout-el decknix-sidebar-layout-render-el
+                        decknix-hub-icons-el decknix-session-assoc-el
+                        decknix-attention-el decknix-ship-el ];
+    testFiles = [ "decknix-sidebar-tasks-test.el" ];
+  };
+
   decknix-browse-el = mkEmacsTestedPackage {
     pname = "decknix-browse";
     src = ./agent-shell/browse;
@@ -3701,6 +3712,7 @@ in
           decknix-ship-progress-el
           decknix-sidebar-layout-el
           decknix-sidebar-layout-render-el
+          decknix-sidebar-tasks-el
           decknix-browse-el
           decknix-repo-sync-el
           decknix-repo-sync-actions-el
@@ -4881,6 +4893,7 @@ ${optionalString cfg.tableOverlay.enable ''
 
         (require 'decknix-sidebar-layout)
         (require 'decknix-sidebar-layout-render)
+        (require 'decknix-sidebar-tasks)
         (decknix--layout-load-state)
         (decknix-sidebar-active-highlight-mode 1)
         ;; A new shipped-retention repaints at once and is persisted with
@@ -7035,9 +7048,15 @@ duration -- the most important number on this branch."
 
               (decknix--sidebar-render-checkpoint)
 
-              ;; ── Hub: Tasks (Jira) ──
-              (when (fboundp 'decknix--hub-render-tasks)
-                (setq line-num (decknix--hub-render-tasks line-num)))
+              ;; ── Tasks: Jira in progress / to pick up, chores, issues ──
+              ;; The session-first layout's grouped section; the previous
+              ;; layout keeps its flat Jira list.
+              (if (and (bound-and-true-p decknix-sidebar-layout-enable)
+                       (fboundp 'decknix--layout-render-tasks))
+                  (setq line-num (decknix--layout-render-tasks
+                                  line-num (max 24 (1- (decknix--layout-sidebar-width)))))
+                (when (fboundp 'decknix--hub-render-tasks)
+                  (setq line-num (decknix--hub-render-tasks line-num))))
 
               (decknix--sidebar-render-checkpoint)
 

@@ -4,7 +4,6 @@
 // Writes jira-tasks.json to hub data directory.
 
 use chrono::{DateTime, Utc};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -26,8 +25,17 @@ pub struct JiraConfig {
     pub email: String,
     /// Path to file containing the API token (one line, trimmed)
     pub api_token_file: String,
-    /// Jira project key for filtering (e.g. "NC")
+    /// Legacy single project key; used only when `projects` is empty.
     pub project: String,
+    /// Project keys whose issues the Tasks section lists.  Overridden at
+    /// runtime by `[hub.jira] projects` in `settings_file`, re-read on
+    /// every poll, so a change applies without a rebuild or restart.
+    pub projects: Vec<String>,
+    /// settings.toml holding the runtime override (default
+    /// ~/.config/decknix/settings.toml).
+    pub settings_file: Option<String>,
+    /// Also list unassigned To Do issues in open sprints.
+    pub pick_up: bool,
     /// Statuses to include
     pub statuses: Vec<String>,
     /// Max results per poll
@@ -43,6 +51,9 @@ impl Default for JiraConfig {
             email: String::new(),
             api_token_file: String::new(),
             project: String::new(),
+            projects: Vec::new(),
+            settings_file: None,
+            pick_up: true,
             statuses: vec![
                 "Ready".into(),
                 "In Progress".into(),
@@ -118,7 +129,17 @@ pub struct JiraLink {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JiraTasksFile {
     pub updated: DateTime<Utc>,
+    /// Issues assigned to me that are not Done.
     pub items: Vec<JiraTask>,
+    /// Unassigned To Do issues in an open sprint of `projects`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pick_up: Vec<JiraTask>,
+    /// The project keys this poll used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<String>,
+    /// Queries that failed without failing the poll (pick-up).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -149,13 +170,18 @@ struct JiraIssue {
 
 #[derive(Debug, Deserialize)]
 struct JiraFields {
+    #[serde(default)]
     summary: String,
     status: JiraStatus,
     priority: Option<JiraPriority>,
     assignee: Option<JiraUser>,
     parent: Option<JiraParent>,
     issuetype: JiraIssueType,
+    // Absent on the issues nested in `subtasks`, which made a whole page
+    // undecodable as soon as any issue had a sub-task.
+    #[serde(default)]
     updated: String,
+    #[serde(default)]
     created: String,
     #[serde(default)]
     labels: Vec<String>,
@@ -283,6 +309,42 @@ fn build_jql(config: &JiraConfig) -> String {
     )
 }
 
+/// The project keys to query: `[hub.jira] projects` in SETTINGS (TOML text)
+/// when present, else the configured list, else the legacy single project.
+pub fn effective_projects(config: &JiraConfig, settings: Option<&str>) -> Vec<String> {
+    let from_settings = settings
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("hub")?.get("jira")?.get("projects")?.as_array().cloned())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(normalise_key)).filter(|k| !k.is_empty()).collect::<Vec<_>>());
+    match from_settings {
+        Some(p) => p,
+        None if !config.projects.is_empty() => config.projects.iter().map(|k| normalise_key(k)).collect(),
+        None if !config.project.is_empty() => vec![normalise_key(&config.project)],
+        None => Vec::new(),
+    }
+}
+
+fn normalise_key(k: &str) -> String {
+    k.trim().to_ascii_uppercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect()
+}
+
+fn project_clause(projects: &[String]) -> String {
+    format!("project in ({})", projects.join(", "))
+}
+
+/// Assigned to me and not Done, in PROJECTS (all projects when empty).
+pub fn in_progress_jql(projects: &[String]) -> String {
+    let scope = if projects.is_empty() { String::new() } else { format!("{} AND ", project_clause(projects)) };
+    format!("{scope}assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC")
+}
+
+/// Unassigned To Do issues in an open sprint of PROJECTS.  A project with no
+/// sprints simply contributes nothing.
+pub fn pick_up_jql(projects: &[String]) -> String {
+    format!("{} AND assignee is EMPTY AND statusCategory = \"To Do\" AND sprint in openSprints() ORDER BY rank ASC",
+            project_clause(projects))
+}
+
 /// Convert a sub-task issue (returned inside `fields.subtasks`) into the
 /// lightweight `JiraTaskRef` we serialize to disk.
 fn subtask_to_ref(issue: JiraIssue, base: &str) -> JiraTaskRef {
@@ -345,20 +407,45 @@ fn issuelink_to_link(link: JiraIssueLink, base: &str) -> Option<JiraLink> {
     })
 }
 
-/// Fetch assigned Jira tasks.
+/// Fetch assigned Jira tasks, and unassigned ones to pick up.
 pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, String> {
     let token = read_api_token(&config.api_token_file)?;
     let client = crate::http_client();
+    let settings_path = config.settings_file.clone().map(PathBuf::from).unwrap_or_else(|| {
+        dirs::home_dir().unwrap_or_default().join(".config/decknix/settings.toml")
+    });
+    let settings = std::fs::read_to_string(&settings_path).ok();
+    let projects = effective_projects(config, settings.as_deref());
+    let base = config.base_url.trim_end_matches('/');
 
-    let jql = build_jql(config);
+    let jql = if projects.is_empty() && !config.statuses.is_empty() && !config.project.is_empty() {
+        build_jql(config)
+    } else {
+        in_progress_jql(&projects)
+    };
+    let items = search(&client, config, &token, &jql, config.max_results as usize).await?
+        .into_iter().map(|i| to_task(i, base)).collect();
+
+    let mut errors = Vec::new();
+    let mut pick_up = Vec::new();
+    if config.pick_up && !projects.is_empty() {
+        match search(&client, config, &token, &pick_up_jql(&projects), 50).await {
+            Ok(issues) => pick_up = issues.into_iter().map(|i| to_task(i, base)).collect(),
+            Err(e) => errors.push(format!("pick-up: {e}")),
+        }
+    }
+
+    Ok(JiraTasksFile { updated: Utc::now(), items, pick_up, projects, errors })
+}
+
+async fn search(client: &reqwest::Client, config: &JiraConfig, token: &str, jql: &str,
+                max_total: usize) -> Result<Vec<JiraIssue>, String> {
     let base = config.base_url.trim_end_matches('/');
     // Enhanced JQL search. Atlassian removed `GET /rest/api/3/search` (410
     // Gone) in favour of `/search/jql`, which is cursor-paged via
     // `nextPageToken` rather than `startAt`/`total`.
     let url = format!("{}/rest/api/3/search/jql", base);
     let fields = "summary,status,priority,assignee,parent,issuetype,updated,created,labels,subtasks,issuelinks";
-
-    let max_total = config.max_results as usize;
     let mut issues: Vec<JiraIssue> = Vec::new();
     let mut next_page_token: Option<String> = None;
 
@@ -371,7 +458,7 @@ pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, Strin
         let page_size = remaining.min(100).to_string();
 
         let mut query: Vec<(&str, String)> = vec![
-            ("jql", jql.clone()),
+            ("jql", jql.to_string()),
             ("maxResults", page_size),
             ("fields", fields.to_string()),
         ];
@@ -381,7 +468,7 @@ pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, Strin
 
         let resp = client
             .get(&url)
-            .basic_auth(&config.email, Some(&token))
+            .basic_auth(&config.email, Some(token))
             .query(&query)
             .send()
             .await
@@ -415,43 +502,39 @@ pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, Strin
 
     // The final page can overshoot the cap; trim to the requested maximum.
     issues.truncate(max_total);
+    Ok(issues)
+}
 
-    let items: Vec<JiraTask> = issues.into_iter().map(|issue| {
-        let f = issue.fields;
-        let subtasks = f.subtasks.into_iter()
-            .map(|sub| subtask_to_ref(sub, base))
-            .collect();
-        let links = f.issue_links.into_iter()
-            .filter_map(|l| issuelink_to_link(l, base))
-            .collect();
-        JiraTask {
-            key: issue.key.clone(),
-            summary: f.summary,
-            status: f.status.name,
-            status_category: f.status.status_category
-                .map(|c| c.key)
-                .unwrap_or_else(|| "unknown".into()),
-            priority: f.priority.map(|p| p.name),
-            assignee: f.assignee.and_then(|a| a.display_name),
-            parent_key: f.parent.as_ref().map(|p| p.key.clone()),
-            parent_summary: f.parent.as_ref()
-                .and_then(|p| p.fields.as_ref())
-                .and_then(|pf| pf.summary.clone()),
-            sprint: None, // Sprint requires custom field — skipped for now
-            issue_type: f.issuetype.name,
-            url: format!("{}/browse/{}", base, issue.key),
-            updated: f.updated.parse().unwrap_or_else(|_| Utc::now()),
-            created: f.created.parse().unwrap_or_else(|_| Utc::now()),
-            labels: if f.labels.is_empty() { None } else { Some(f.labels) },
-            subtasks,
-            links,
-        }
-    }).collect();
-
-    Ok(JiraTasksFile {
-        updated: Utc::now(),
-        items,
-    })
+fn to_task(issue: JiraIssue, base: &str) -> JiraTask {
+    let f = issue.fields;
+    let subtasks = f.subtasks.into_iter()
+        .map(|sub| subtask_to_ref(sub, base))
+        .collect();
+    let links = f.issue_links.into_iter()
+        .filter_map(|l| issuelink_to_link(l, base))
+        .collect();
+    JiraTask {
+        key: issue.key.clone(),
+        summary: f.summary,
+        status: f.status.name,
+        status_category: f.status.status_category
+            .map(|c| c.key)
+            .unwrap_or_else(|| "unknown".into()),
+        priority: f.priority.map(|p| p.name),
+        assignee: f.assignee.and_then(|a| a.display_name),
+        parent_key: f.parent.as_ref().map(|p| p.key.clone()),
+        parent_summary: f.parent.as_ref()
+            .and_then(|p| p.fields.as_ref())
+            .and_then(|pf| pf.summary.clone()),
+        sprint: None, // Sprint requires custom field — skipped for now
+        issue_type: f.issuetype.name,
+        url: format!("{}/browse/{}", base, issue.key),
+        updated: f.updated.parse().unwrap_or_else(|_| Utc::now()),
+        created: f.created.parse().unwrap_or_else(|_| Utc::now()),
+        labels: if f.labels.is_empty() { None } else { Some(f.labels) },
+        subtasks,
+        links,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -478,12 +561,13 @@ pub async fn run_jira_adapter(
                         ok: false,
                     }
                 } else {
-                    eprintln!("hub: jira-tasks: {} items", data.items.len());
+                    eprintln!("hub: jira-tasks: {} mine, {} to pick up, projects {:?}",
+                              data.items.len(), data.pick_up.len(), data.projects);
                     AdapterStatus {
                         name: "jira-tasks".into(),
                         last_poll: Some(Utc::now()),
-                        last_error: None,
-                        ok: true,
+                        last_error: data.errors.first().cloned(),
+                        ok: data.errors.is_empty(),
                     }
                 }
             }
@@ -529,6 +613,44 @@ mod tests {
         assert!(jql.starts_with("assignee = currentUser()"), "{jql}");
     }
 
+    #[test]
+    fn settings_toml_overrides_the_configured_projects() {
+        let cfg = JiraConfig { projects: vec!["hx".into(), "DOS".into()], ..Default::default() };
+        assert_eq!(effective_projects(&cfg, None), vec!["HX", "DOS"]);
+        let toml = "[hub.jira]\nprojects = [\"plat\", \" CONN \"]\n";
+        assert_eq!(effective_projects(&cfg, Some(toml)), vec!["PLAT", "CONN"]);
+        assert_eq!(effective_projects(&cfg, Some("[repos]\nworkspaces = []")), vec!["HX", "DOS"]);
+        assert_eq!(effective_projects(&cfg, Some("not toml [")), vec!["HX", "DOS"]);
+        let legacy = JiraConfig { project: "NC".into(), ..Default::default() };
+        assert_eq!(effective_projects(&legacy, None), vec!["NC"]);
+        assert!(effective_projects(&JiraConfig::default(), None).is_empty());
+    }
+
+    #[test]
+    fn keys_are_sanitised_so_jql_cannot_be_injected() {
+        let toml = "[hub.jira]\nprojects = [\"HX) OR (1=1\"]";
+        assert_eq!(effective_projects(&JiraConfig::default(), Some(toml)), vec!["HXOR11"]);
+    }
+
+    #[test]
+    fn in_progress_and_pick_up_queries() {
+        let p = vec!["HX".to_string(), "DOS".to_string()];
+        assert_eq!(in_progress_jql(&p),
+                   "project in (HX, DOS) AND assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC");
+        assert_eq!(in_progress_jql(&[]),
+                   "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC");
+        assert_eq!(pick_up_jql(&p),
+                   "project in (HX, DOS) AND assignee is EMPTY AND statusCategory = \"To Do\" AND sprint in openSprints() ORDER BY rank ASC");
+    }
+
+    #[test]
+    fn tasks_file_omits_empty_extras() {
+        let f = JiraTasksFile { updated: Utc::now(), items: vec![], pick_up: vec![],
+                                projects: vec![], errors: vec![] };
+        let json = serde_json::to_string(&f).unwrap();
+        assert!(!json.contains("pick_up") && !json.contains("errors"), "{json}");
+    }
+
     // The enhanced `/search/jql` envelope: `issues` + a `nextPageToken`
     // cursor + optional `isLast`. Locks the serde renames the migration
     // depends on.
@@ -550,6 +672,19 @@ mod tests {
         assert_eq!(resp.issues.len(), 1);
         assert_eq!(resp.next_page_token.as_deref(), Some("abc"));
         assert_eq!(resp.is_last, Some(false));
+    }
+
+    #[test]
+    fn an_issue_with_subtasks_decodes() {
+        let json = r#"{"issues": [{"key": "HX-1", "fields": {"summary": "s",
+            "status": {"name": "In Progress", "statusCategory": {"key": "indeterminate"}},
+            "issuetype": {"name": "Story"},
+            "updated": "2026-01-01T00:00:00.000+0000", "created": "2026-01-01T00:00:00.000+0000",
+            "subtasks": [{"key": "HX-2", "fields": {"summary": "sub",
+                "status": {"name": "To Do", "statusCategory": {"key": "new"}},
+                "issuetype": {"name": "Sub-task"}}}]}}]}"#;
+        let resp: JiraSearchResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.issues[0].fields.subtasks.len(), 1);
     }
 
     // Last page: the cursor fields are simply absent — must default rather
