@@ -84,7 +84,48 @@ How a repo ships decides what "last stage" means:
   build is green;
 - **none**: anything else, done at merge.
 
-`decknix-ship-repo-kinds` forces a kind per repo. A ship progress record,
+`decknix-ship-repo-kinds` forces a kind per repo.
+
+### Several shippers per repo
+
+A repo can ship more than one way at once, for example TeamCity
+environments in one region and Kargo stages in two others. Each way is a
+*shipper* with its own ordered stages and a region label, set with
+`decknix-ship-repo-shippers` (which wins over `decknix-ship-repo-kinds`):
+
+```elisp
+(setq decknix-ship-repo-shippers
+      '(("\\`my-org/widget-api\\'"
+         (:kind teamcity :region "AU" :stages ("development" "testing" "production"))
+         (:kind teamcity :region "UK" :stages ("uk_production"))
+         (:kind gitops :region "US"))))
+```
+
+A `teamcity` shipper follows only its `:stages` and is done once the last
+holds the merge. A `gitops` shipper reads the `kargo-stages.json` entry of
+the same `region` (list the repo once per region under
+`decknix.services.hub.kargo.repos`, each with its `region`); until that
+entry exists it shows its own `:stages`, if given, as pending. A Kargo repo
+listed per region with no Emacs setting becomes one shipper per region
+automatically.
+
+The PR is shipped only when every shipper's last stage is verified. The row
+shows one token per shipper, region first, furthest behind first (failed,
+then least of its stages done), with the region dropped from stage names it
+repeats:
+
+```
+    ■ US→stg AU✓prd UK✓prd #812 HX-1610 …  US promoting to stg, others shipped
+    ■ US✗prd AU·prd UK·prd #812 …          failed in US prd (red), so the PR is failed
+```
+
+The current and next lines come from the furthest-behind shipper (`US: in
+stg`, `US: promote prd`); when it has nothing left to promote the next
+shipper still going supplies the next step, and once all are done the
+current line is `shipped to AU, UK, US`. A ship progress record updates the
+shipper whose stages name its `stage`.
+
+A ship progress record,
 when present, wins over the deploy feeds: a ship workflow writes
 `~/.local/state/decknix/ship/<owner>-<repo>-<number>.json` as
 

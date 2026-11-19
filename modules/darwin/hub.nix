@@ -38,7 +38,7 @@ let
       enabled = cfg.kargo.enable;
       interval_secs = cfg.kargo.interval;
       repos = map (r: {
-        inherit (r) repo project warehouse stages;
+        inherit (r) repo project warehouse stages region;
         stage_pattern = r.stagePattern;
       }) cfg.kargo.repos;
     };
@@ -282,6 +282,19 @@ in
               description = ''
                 Kargo stage name for a display name, with `{warehouse}` and
                 `{stage}` substituted.  Null means `{warehouse}-{stage}-deploy`.
+              '';
+            };
+            region = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              example = "US";
+              description = ''
+                Label for this deploy path when the repo ships more than one
+                way.  A repo may be listed once per region; each entry becomes
+                its own shipper in the sidebar, done only when all are.  Pair
+                it with a `gitops` shipper of the same region in the Emacs
+                option `decknix-ship-repo-shippers` to combine Kargo with
+                TeamCity.
               '';
             };
           };

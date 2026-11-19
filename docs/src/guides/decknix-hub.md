@@ -133,7 +133,7 @@ life of the daemon.
 |--------|---------|-------------|
 | `decknix.services.hub.kargo.enable` | `false` | Enable the Kargo adapter |
 | `decknix.services.hub.kargo.interval` | `300` | Seconds between polls |
-| `decknix.services.hub.kargo.repos` | `[]` | `{ repo; project; warehouse; stages; stagePattern ? null; }` per repo |
+| `decknix.services.hub.kargo.repos` | `[]` | `{ repo; project; warehouse; stages; stagePattern ? null; region ? null; }` per repo |
 
 ```nix
 decknix.services.hub.kargo = {
@@ -146,6 +146,13 @@ decknix.services.hub.kargo = {
   }];
 };
 ```
+
+A repo that ships through Kargo in several regions, or through Kargo in some
+and TeamCity in others, is listed once per region with a `region` label;
+each entry becomes its own PR entry in `kargo-stages.json` and its own
+shipper in the sidebar (see the WIP layout's *Several shippers per repo*).
+When freight bundles images from several repos, the revision comes from the
+image whose `org.opencontainers.image.source` names the repo.
 
 The `kargo` CLI must be logged in for the user the daemon runs as
 (`kargo login`); otherwise `kargo-stages.json` carries the error and the
@@ -327,7 +334,7 @@ All state is stored in `~/.config/decknix/hub/`:
 | `github-issues.json` | Open GitHub issues assigned to you |
 | `task-chores.json` | Pending Taskwarrior chores |
 | `teamcity-builds.json` | TeamCity build status for WIP branches |
-| `kargo-stages.json` | Per merged PR in a Kargo repo: `stages`, `reached` (holding the merge, verified), `promoting`, `failed`, and `verified_at` once the last stage verified it; `errors` when kargo failed |
+| `kargo-stages.json` | Per merged PR in a Kargo repo (one entry per `region` when configured per region): `stages`, `reached` (holding the merge, verified), `promoting`, `failed`, and `verified_at` once the last stage verified it; `errors` when kargo failed |
 | `meta.json` | Adapter health: last poll time, errors |
 
 Each adapter writes independently — a slow Jira poll won't block GitHub

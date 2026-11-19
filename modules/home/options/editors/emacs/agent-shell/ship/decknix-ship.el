@@ -19,8 +19,16 @@
 ;;   ci        nothing deploys; done once the merge's own build is green
 ;;   none      nothing deploys or builds; merged is done
 ;;
+;; A repo can also ship several ways at once, each a "shipper" with its
+;; own ordered stages and a region label: TeamCity environments for one
+;; region, Kargo stages for another (`decknix-ship-repo-shippers', or one
+;; regional entry per shipper in kargo-stages.json).  Such a PR is shipped
+;; only when every shipper's last stage is verified; the furthest-behind
+;; shipper leads its label and its current and next lines.
+;;
 ;; A ship-progress file written by the /ship workflow, when present, is a
-;; stronger signal than either deploy feed and wins over both.
+;; stronger signal than either deploy feed and wins over both.  With
+;; several shippers it updates the one whose stages name its stage.
 ;;
 ;; Everything is read from memory the hub watcher already parsed, so a
 ;; status costs alist lookups and a timestamp compare: no I/O, safe on the
@@ -56,6 +64,24 @@ dependency-bump title means `ci', anything else `none'."
   :type '(alist :key-type regexp
                 :value-type (choice (const gitops) (const teamcity)
                                     (const ci) (const none)))
+  :group 'decknix-ship)
+
+(defcustom decknix-ship-repo-shippers nil
+  "Alist of (REGEXP . SHIPPERS) for repos that ship more than one way.
+REGEXP matches `owner/repo', case-insensitively; the first match wins
+over `decknix-ship-repo-kinds'.  SHIPPERS is a list of plists, one per
+independent deploy path:
+
+  (:kind teamcity :region \"AU\" :stages (\"development\" \"production\"))
+  (:kind gitops :region \"US\")
+
+A `teamcity' shipper follows only its :stages, in that order, and is done
+once the last of them holds the merge.  A `gitops' shipper reads the
+kargo-stages.json entry whose `region' matches its :region (configure the
+repo once per region in the hub); its :stages are shown until that entry
+exists.  :region labels the shipper in the sidebar.  The PR is shipped
+only when every shipper is done."
+  :type '(alist :key-type regexp :value-type (repeat plist))
   :group 'decknix-ship)
 
 (defcustom decknix-ship-ci-only-title-regexp
@@ -110,10 +136,20 @@ Memoised statuses compare it, as they compare the deploy feeds by identity.")
 
 ;; --- small helpers ------------------------------------------------------
 
+(defvar decknix-ship--time-cache (make-hash-table :test 'equal)
+  "ISO timestamp -> float time.  Parsing dominated a status rebuild once a
+PR had a shipper per region, and the feeds repeat the same few stamps.")
+
 (defun decknix-ship--time (iso)
   "Return ISO as a float time, or nil."
   (and (stringp iso) (not (string-empty-p iso))
-       (ignore-errors (float-time (date-to-time iso)))))
+       (let ((hit (gethash iso decknix-ship--time-cache 'miss)))
+         (if (not (eq hit 'miss))
+             hit
+           (when (> (hash-table-count decknix-ship--time-cache) 2000)
+             (clrhash decknix-ship--time-cache))
+           (puthash iso (ignore-errors (float-time (date-to-time iso)))
+                    decknix-ship--time-cache)))))
 
 (defun decknix-ship-merged-p (pr)
   "Return non-nil when hub WIP PR alist PR has merged."
@@ -138,12 +174,18 @@ Memoised statuses compare it, as they compare the deploy feeds by identity.")
                            (alist-get 'branches entry))))
     (alist-get 'environments branch)))
 
-(defun decknix-ship--kargo-entry (repo number kargo)
-  "Return KARGO's entry for REPO#NUMBER, or nil."
-  (seq-find (lambda (p) (and (equal (alist-get 'number p) number)
-                             (string-equal-ignore-case (or (alist-get 'repo p) "")
-                                                       (or repo ""))))
-            (alist-get 'prs kargo)))
+(defun decknix-ship--kargo-entries (repo number kargo)
+  "Return KARGO's entries for REPO#NUMBER, one per region it ships to."
+  (seq-filter (lambda (p) (and (equal (alist-get 'number p) number)
+                               (string-equal-ignore-case (or (alist-get 'repo p) "")
+                                                         (or repo ""))))
+              (alist-get 'prs kargo)))
+
+(defun decknix-ship--kargo-entry (repo number kargo &optional region)
+  "Return KARGO's entry for REPO#NUMBER in REGION (any region when nil)."
+  (seq-find (lambda (p) (or (null region)
+                            (string-equal-ignore-case (or (alist-get 'region p) "") region)))
+            (decknix-ship--kargo-entries repo number kargo)))
 
 (defun decknix-ship--kargo-repo-p (repo kargo)
   "Return non-nil when KARGO tracks REPO at all."
@@ -185,11 +227,17 @@ Each predicate takes a stage name."
                       (t 'pending))))
     (list :stages stages :current current :next next :state state)))
 
-(defun decknix-ship-teamcity-status (merged-at envs)
-  "Return the status of a merge at MERGED-AT through TeamCity ENVS."
+(defun decknix-ship-teamcity-status (merged-at envs &optional order finals)
+  "Return the status of a merge at MERGED-AT through TeamCity ENVS.
+ORDER lists the environments to follow (default `decknix-ship-teamcity-envs')
+and FINALS those that must all hold the merge; by default the final
+environments the repo deploys to."
   (let* ((by-name (mapcar (lambda (e) (cons (alist-get 'env e) e)) envs))
-         (stages (seq-filter (lambda (n) (assoc n by-name)) decknix-ship-teamcity-envs))
-         (finals (seq-filter (lambda (n) (member n decknix-ship-teamcity-final-envs)) stages))
+         (stages (seq-filter (lambda (n) (assoc n by-name))
+                             (or order decknix-ship-teamcity-envs)))
+         (finals (or finals
+                     (seq-filter (lambda (n) (member n decknix-ship-teamcity-final-envs))
+                                 stages)))
          (after-merge (lambda (e) (let ((f (alist-get 'finished e)))
                                     (and (stringp f) (stringp merged-at)
                                          (not (string< f merged-at))))))
@@ -231,6 +279,7 @@ freight contains the merge, verified), and optionally `failed' and
                   (lambda (s) (member s (alist-get 'promoting entry)))
                   (lambda (s) (member s (alist-get 'failed entry))))))
     (append (list :kind 'gitops
+                  :region (alist-get 'region entry)
                   :done-at (and (eq (plist-get status :state) 'done)
                                 (or (decknix-ship--time (alist-get 'verified_at entry))
                                     (float-time))))
@@ -259,43 +308,128 @@ and its `status' (`verified', `promoting', `failed', `done')."
                                  (float-time)))
           :source 'ship)))
 
+(defun decknix-ship--regioned (status region)
+  "Return STATUS labelled with REGION, when there is one."
+  (if region (append (list :region region) status) status))
+
+(defun decknix-ship--shipper-status (shipper repo pr deploys kargo)
+  "Return the status of REPO's PR through SHIPPER, a plist of
+`decknix-ship-repo-shippers'."
+  (let ((region (plist-get shipper :region))
+        (stages (plist-get shipper :stages)))
+    (decknix-ship--regioned
+     (pcase (plist-get shipper :kind)
+       ('teamcity
+        (decknix-ship-teamcity-status (alist-get 'merged_at pr)
+                                      (decknix-ship--teamcity-envs repo deploys)
+                                      stages (and stages (last stages))))
+       ('gitops
+        (let ((entry (decknix-ship--kargo-entry repo (alist-get 'number pr) kargo region)))
+          (if entry
+              (decknix-ship-kargo-status entry)
+            (list :kind 'gitops :state 'pending :stages stages
+                  :current nil :next (car stages)))))
+       (_ (list :kind 'none :state 'done :stages nil :current nil :next nil
+                :done-at (decknix-ship--time (alist-get 'merged_at pr)))))
+     region)))
+
+(defun decknix-ship--kind-statuses (kind repo pr deploys kargo)
+  "Return the statuses of REPO's PR for a repo that ships as KIND.
+One per regional Kargo entry for `gitops', else a single status."
+  (let ((merged-at (alist-get 'merged_at pr)))
+    (pcase kind
+      ('teamcity
+       (list (decknix-ship-teamcity-status merged-at
+                                           (decknix-ship--teamcity-envs repo deploys))))
+      ('gitops
+       (or (mapcar #'decknix-ship-kargo-status
+                   (decknix-ship--kargo-entries repo (alist-get 'number pr) kargo))
+           (list (list :kind 'gitops :state 'pending :stages nil :current nil :next nil))))
+      ('ci
+       (let ((ci (alist-get 'status (alist-get 'ci pr))))
+         (list (list :kind 'ci :stages '("ci")
+                     :current (and (equal ci "pass") "ci")
+                     :next (and (not (equal ci "pass")) "ci")
+                     :state (pcase ci ("pass" 'done) ("fail" 'failed) (_ 'deploying))
+                     :done-at (and (equal ci "pass") (decknix-ship--time merged-at))))))
+      (_ (list (list :kind 'none :state 'done :stages nil :current nil :next nil
+                     :done-at (decknix-ship--time merged-at)))))))
+
+(defun decknix-ship--apply-progress (statuses progress)
+  "Return STATUSES with the /ship record PROGRESS applied.
+It replaces a lone status outright, as before shippers existed; among
+several it replaces the one whose stages name its stage, if any."
+  (cond
+   ((null progress) statuses)
+   ((null (cdr statuses))
+    (let ((s (car statuses)))
+      (list (decknix-ship--regioned
+             (decknix-ship-progress-status progress (plist-get s :kind) (plist-get s :stages))
+             (plist-get s :region)))))
+   (t (let ((stage (alist-get 'stage progress)) hit)
+        (mapcar (lambda (s)
+                  (if (or hit (not (member stage (plist-get s :stages))))
+                      s
+                    (setq hit t)
+                    (decknix-ship--regioned
+                     (decknix-ship-progress-status progress (plist-get s :kind)
+                                                   (plist-get s :stages))
+                     (plist-get s :region))))
+                statuses)))))
+
+(defun decknix-ship--behind-rank (status)
+  "Return how far behind STATUS is: -1 failed, else the share of stages done."
+  (let ((stages (plist-get status :stages))
+        (current (plist-get status :current)))
+    (pcase (plist-get status :state)
+      ('failed -1.0)
+      ('done 1.0)
+      (_ (if (and stages current (member current stages))
+             (/ (float (1+ (seq-position stages current))) (1+ (length stages)))
+           0.0)))))
+
+(defun decknix-ship-combine (statuses)
+  "Return one status for a PR shipping through every one of STATUSES.
+A single status is returned as is.  Several make a `multi' status whose
+`:shippers' are ordered furthest-behind first (failed, then least of
+their stages done); the leader supplies `:current', `:next' and `:stages',
+and the PR is `done' only when every shipper is."
+  (if (null (cdr statuses))
+      (car statuses)
+    (let* ((ordered (sort (copy-sequence statuses)
+                          (lambda (a b) (< (decknix-ship--behind-rank a)
+                                           (decknix-ship--behind-rank b)))))
+           (lead (car ordered))
+           (done (seq-every-p (lambda (s) (eq (plist-get s :state) 'done)) statuses))
+           (done-at (and done (apply #'max (mapcar (lambda (s) (or (plist-get s :done-at) 0))
+                                                   statuses)))))
+      (list :kind 'multi :shippers ordered
+            :region (plist-get lead :region)
+            :stages (plist-get lead :stages)
+            :current (plist-get lead :current)
+            :next (plist-get lead :next)
+            :state (if done 'done (plist-get lead :state))
+            :done-at (and done-at (> done-at 0) done-at)
+            :source (plist-get lead :source)))))
+
 (defun decknix-ship-status (repo pr &optional deploys kargo progress)
   "Return the ship status plist of REPO's PR, or nil when PR is not merged.
 DEPLOYS, KARGO and PROGRESS default to the in-memory hub data."
   (when (decknix-ship-merged-p pr)
     (let* ((deploys (or deploys (funcall decknix-ship-teamcity-deploys-function)))
            (kargo (or kargo (funcall decknix-ship-kargo-function)))
-           (number (alist-get 'number pr))
-           (progress (or progress (funcall decknix-ship-progress-function repo number)))
-           (kind (decknix-ship-kind repo pr deploys kargo))
-           (merged-at (alist-get 'merged_at pr))
-           (status
-            (pcase kind
-              ('teamcity
-               (decknix-ship-teamcity-status merged-at
-                                             (decknix-ship--teamcity-envs repo deploys)))
-              ('gitops
-               (let ((entry (decknix-ship--kargo-entry repo number kargo)))
-                 (if entry
-                     (decknix-ship-kargo-status entry)
-                   (list :kind 'gitops :state 'pending :stages nil
-                         :current nil :next nil))))
-              ('ci
-               (let ((ci (alist-get 'status (alist-get 'ci pr))))
-                 (list :kind 'ci :stages '("ci")
-                       :current (and (equal ci "pass") "ci")
-                       :next (and (not (equal ci "pass")) "ci")
-                       :state (pcase ci ("pass" 'done) ("fail" 'failed)
-                                (_ 'deploying))
-                       :done-at (and (equal ci "pass")
-                                     (decknix-ship--time merged-at)))))
-              (_ (list :kind 'none :state 'done :stages nil :current nil :next nil
-                       :done-at (decknix-ship--time merged-at))))))
+           (progress (or progress (funcall decknix-ship-progress-function
+                                           repo (alist-get 'number pr))))
+           (shippers (decknix-ship--repo-match repo decknix-ship-repo-shippers))
+           (statuses (if shippers
+                         (mapcar (lambda (sh)
+                                   (decknix-ship--shipper-status sh repo pr deploys kargo))
+                                 shippers)
+                       (decknix-ship--kind-statuses (decknix-ship-kind repo pr deploys kargo)
+                                                    repo pr deploys kargo))))
       ;; /ship's record is the stronger signal: it is what a human (or an
       ;; agent) verified, not what a deploy feed inferred.
-      (if progress
-          (decknix-ship-progress-status progress kind (plist-get status :stages))
-        status))))
+      (decknix-ship-combine (decknix-ship--apply-progress statuses progress)))))
 
 ;; --- what the sidebar shows ---------------------------------------------
 
@@ -311,27 +445,47 @@ treated as shipped just now, so it is seen at least once."
       (let ((at (or (plist-get status :done-at) now)))
         (and (< (- now at) retention) 'shipped)))))
 
+(defun decknix-ship--display (stage region)
+  "Return STAGE's compact name, without a leading REGION it repeats."
+  (let ((name (decknix-ship-short-name stage))
+        (case-fold-search t))
+    (if (and region (stringp name)
+             (string-match (concat "\\`" (regexp-quote region) "[-_]") name))
+        (substring name (match-end 0))
+      name)))
+
+(defun decknix-ship--token (status)
+  "Return STATUS's stage token, prefixed by its region, propertized."
+  (let* ((state (plist-get status :state))
+         (kind (plist-get status :kind))
+         (region (plist-get status :region))
+         (name (lambda (s fallback) (if s (decknix-ship--display s region) fallback))))
+    (pcase-let ((`(,text . ,face)
+                 (pcase state
+                   ('done (cons (if (memq kind '(none ci))
+                                    (if (eq kind 'ci) "✓ci" "merged")
+                                  (concat "✓" (funcall name (plist-get status :current) "done")))
+                                '(:foreground "#87af87")))
+                   ('failed (cons (concat "✗" (funcall name (plist-get status :next) "deploy"))
+                                  '(:foreground "#ff5f5f" :weight bold)))
+                   ('deploying (cons (concat "→" (funcall name (plist-get status :next) "deploy"))
+                                     '(:foreground "#d7af5f")))
+                   (_ (cons (concat "·" (funcall name (plist-get status :next) "deploy"))
+                            '(:foreground "#d7af5f"))))))
+      (propertize (concat region text) 'face face))))
+
 (defun decknix-ship-label (status)
   "Return the compact stage token for STATUS, propertized.
 
   ✓prd    shipped (green)        →stg   promoting to stg (amber)
   ✗test   failed at test (red)   ·dev   waiting for dev (amber)
-  merged  nothing to deploy (green)"
-  (let* ((state (plist-get status :state))
-         (next (plist-get status :next))
-         (current (plist-get status :current))
-         (kind (plist-get status :kind)))
-    (pcase state
-      ('done (propertize (if (memq kind '(none ci))
-                             (if (eq kind 'ci) "✓ci" "merged")
-                           (concat "✓" (decknix-ship-short-name (or current "done"))))
-                         'face '(:foreground "#87af87")))
-      ('failed (propertize (concat "✗" (decknix-ship-short-name (or next "deploy")))
-                           'face '(:foreground "#ff5f5f" :weight bold)))
-      ('deploying (propertize (concat "→" (decknix-ship-short-name (or next "deploy")))
-                              'face '(:foreground "#d7af5f")))
-      (_ (propertize (concat "·" (decknix-ship-short-name (or next "deploy")))
-                     'face '(:foreground "#d7af5f"))))))
+  merged  nothing to deploy (green)
+
+A PR with several shippers shows one region-prefixed token per shipper,
+furthest behind first: `US→stg AU✓prd UK✓prd'."
+  (if (eq (plist-get status :kind) 'multi)
+      (mapconcat #'decknix-ship--token (plist-get status :shippers) " ")
+    (decknix-ship--token status)))
 
 (defun decknix-ship-severity (status)
   "Return the sidebar severity rank of a merged PR with STATUS (low is worse)."
@@ -350,27 +504,59 @@ treated as shipped just now, so it is seen at least once."
               (list (alist-get 'title pr)
                     (and (alist-get 'branch pr) (upcase (alist-get 'branch pr)))))))
 
+(defun decknix-ship--lines-1 (status close)
+  "Return (:current TEXT :next TEXT) for one shipper's STATUS.
+CLOSE is the step after the last stage, or nil.  A regional status names
+its region first and its stages without the region they repeat."
+  (let* ((region (plist-get status :region))
+         (name (lambda (s) (if (and s region) (decknix-ship--display s region) s)))
+         (state (plist-get status :state))
+         (current (funcall name (plist-get status :current)))
+         (next (funcall name (plist-get status :next)))
+         (after-next (funcall name (cadr (member (plist-get status :next)
+                                                 (plist-get status :stages)))))
+         (tag (lambda (text) (and text (if region (concat region ": " text) text)))))
+    (list :current (funcall tag
+                            (pcase state
+                              ('done (if current (concat "shipped to " current) "merged"))
+                              ('failed (concat "failed in " (or next "deploy")))
+                              ('deploying (concat "deploying " (or next "")))
+                              (_ (if current (concat "in " current) "merged, not deployed"))))
+          :next (pcase state
+                  ('done close)
+                  ('failed (funcall tag (concat "fix and redeploy " (or next ""))))
+                  ('deploying (if after-next (funcall tag (concat "promote " after-next)) close))
+                  (_ (if next (funcall tag (concat "promote " next)) close))))))
+
 (defun decknix-ship-lines (status &optional key)
   "Return (:current TEXT :next TEXT :state STATE) for STATUS.
 KEY is a linked Jira key: once the last stage is done the next step is
-closing it, when `decknix-ship-ticket-open-function' says it is open."
+closing it, when `decknix-ship-ticket-open-function' says it is open.
+With several shippers the furthest-behind one speaks; when it has nothing
+left to promote, the next one still shipping supplies the next step."
   (let* ((state (plist-get status :state))
-         (current (plist-get status :current))
-         (next (plist-get status :next))
-         (after-next (cadr (member next (plist-get status :stages))))
          (close (and key (funcall decknix-ship-ticket-open-function key)
-                     (concat "close " key))))
-    (list :state state
-          :current (pcase state
-                     ('done (if current (concat "shipped to " current) "merged"))
-                     ('failed (concat "failed in " (or next "deploy")))
-                     ('deploying (concat "deploying " (or next "")))
-                     (_ (if current (concat "in " current) "merged, not deployed")))
-          :next (pcase state
-                  ('done close)
-                  ('failed (concat "fix and redeploy " (or next "")))
-                  ('deploying (if after-next (concat "promote " after-next) close))
-                  (_ (if next (concat "promote " next) close))))))
+                     (concat "close " key)))
+         (shippers (plist-get status :shippers)))
+    (cons :state
+          (cons state
+                (cond
+                 ((null shippers) (decknix-ship--lines-1 status close))
+                 ((eq state 'done)
+                  (list :current (concat "shipped to "
+                                         (mapconcat (lambda (s) (or (plist-get s :region) "?"))
+                                                    shippers ", "))
+                        :next close))
+                 (t
+                  (let* ((lead (decknix-ship--lines-1 (car shippers) nil))
+                         (other (seq-find (lambda (s) (not (eq (plist-get s :state) 'done)))
+                                          (cdr shippers))))
+                    (list :current (plist-get lead :current)
+                          :next (or (plist-get lead :next)
+                                    (and other
+                                         (let ((o (decknix-ship--lines-1 other nil)))
+                                           (or (plist-get o :next) (plist-get o :current))))
+                                    close)))))))))
 
 ;; --- retention setting ---------------------------------------------------
 

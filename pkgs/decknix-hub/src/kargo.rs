@@ -8,6 +8,10 @@
 // revision itself; an ancestry check is required.  Compare answers are cached
 // forever: two commits' ancestry never changes.
 //
+// A repo may be configured once per region (each its own warehouse and
+// stage chain, with a `region` label); every regional entry becomes its own
+// PR entry, so the sidebar can track each region as a separate shipper.
+//
 // Writes kargo-stages.json.  A missing or unauthenticated `kargo` degrades to
 // an `errors` entry; the repo list is still written so the sidebar knows
 // those repos ship through Kargo and shows their merges as pending.
@@ -53,6 +57,10 @@ pub struct KargoRepo {
     /// substituted.  Defaults to `{warehouse}-{stage}-deploy`.
     #[serde(default)]
     pub stage_pattern: Option<String>,
+    /// Label for this deploy path when the repo ships through several, e.g.
+    /// `US`; copied onto each PR entry.
+    #[serde(default)]
+    pub region: Option<String>,
 }
 
 impl KargoRepo {
@@ -79,6 +87,8 @@ pub struct KargoStagesFile {
 pub struct KargoPr {
     pub repo: String,
     pub number: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
     pub merge_commit: String,
     pub stages: Vec<String>,
     /// Stages whose current freight contains the merge and passed verification.
@@ -121,16 +131,31 @@ fn is_sha(s: &str) -> bool {
     (7..=40).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+fn image_source_is(image: &Value, repo: &str) -> bool {
+    image.pointer("/annotations/org.opencontainers.image.source").and_then(Value::as_str)
+        .map(|src| src.trim_end_matches(".git").to_ascii_lowercase()
+            .ends_with(&format!("/{}", repo.to_ascii_lowercase())))
+        .unwrap_or(false)
+}
+
 /// The git revision a freight item was built from: the OCI revision
 /// annotation, else a sha suffix on an image tag or chart version
 /// (`2749.0.0-<sha>`, `12.0.0-r123.<sha>`), else a git commit.
-pub fn freight_revision(item: &Value) -> Option<String> {
+///
+/// Freight often bundles images from several repos (a shared sidecar) or
+/// several images from one repo built at different commits (a schema
+/// image), so with REPO the first image whose source annotation names it
+/// wins over the first image overall.
+pub fn freight_revision(item: &Value, repo: Option<&str>) -> Option<String> {
     let images = item.get("images").and_then(Value::as_array);
-    if let Some(rev) = images.into_iter().flatten()
-        .filter_map(|i| i.pointer("/annotations/org.opencontainers.image.revision"))
-        .filter_map(Value::as_str)
-        .find(|s| is_sha(s)) {
-        return Some(rev.to_string());
+    let revision = |i: &Value| i.pointer("/annotations/org.opencontainers.image.revision")
+        .and_then(Value::as_str).filter(|s| is_sha(s)).map(str::to_string);
+    if let Some(rev) = repo.and_then(|r| images.into_iter().flatten()
+        .filter(|i| image_source_is(i, r)).find_map(revision)) {
+        return Some(rev);
+    }
+    if let Some(rev) = images.into_iter().flatten().find_map(revision) {
+        return Some(rev);
     }
     let suffix = |s: &str| s.rsplit(['-', '.']).next()
         .filter(|t| is_sha(t) && t.len() >= 7 && t.chars().any(|c| c.is_ascii_alphabetic()))
@@ -148,13 +173,13 @@ pub fn freight_revision(item: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Read a Stage object.
-pub fn stage_info(stage: &Value) -> StageInfo {
+/// Read a Stage object deploying REPO's freight (any repo when None).
+pub fn stage_info(stage: &Value, repo: Option<&str>) -> StageInfo {
     let status = stage.get("status").unwrap_or(&Value::Null);
     let current = status.pointer("/freightHistory/0");
     let revision = current
         .and_then(|c| c.get("items")).and_then(Value::as_object)
-        .and_then(|items| items.values().find_map(freight_revision));
+        .and_then(|items| items.values().find_map(|i| freight_revision(i, repo)));
     let verification = current
         .and_then(|c| c.pointer("/verificationHistory/0"));
     let vphase = verification.and_then(|v| v.get("phase")).and_then(Value::as_str);
@@ -180,7 +205,7 @@ pub fn stage_info(stage: &Value) -> StageInfo {
         .into_iter().flatten().skip(1)
         .filter_map(|h| {
             let rev = h.get("items").and_then(Value::as_object)
-                .and_then(|items| items.values().find_map(freight_revision))?;
+                .and_then(|items| items.values().find_map(|i| freight_revision(i, repo)))?;
             let v = h.pointer("/verificationHistory/0")?;
             (v.get("phase").and_then(Value::as_str) == Some("Successful")).then_some(())?;
             Some((rev, v.get("finishTime").and_then(Value::as_str)?.to_string()))
@@ -229,6 +254,7 @@ where
     KargoPr {
         repo: repo.repo.clone(),
         number,
+        region: repo.region.clone(),
         merge_commit: merge.to_string(),
         stages: repo.stages.clone(),
         reached,
@@ -318,12 +344,16 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path) -> KargoStagesFile {
     let mut infos: HashMap<String, StageInfo> = HashMap::new();
 
     let mut by_project: HashMap<&str, Vec<String>> = HashMap::new();
+    let mut stage_repo: HashMap<String, &str> = HashMap::new();
     for r in &config.repos {
         if !prs_in.iter().any(|(repo, _, _)| repo.eq_ignore_ascii_case(&r.repo)) {
             continue;
         }
-        by_project.entry(r.project.as_str()).or_default()
-            .extend(r.stages.iter().map(|s| r.kargo_stage(s)));
+        for s in &r.stages {
+            let name = r.kargo_stage(s);
+            stage_repo.insert(name.clone(), r.repo.as_str());
+            by_project.entry(r.project.as_str()).or_default().push(name);
+        }
     }
     for (project, names) in by_project {
         let mut args = vec!["get".to_string(), "stages".into(), "--project".into(), project.into()];
@@ -332,7 +362,8 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path) -> KargoStagesFile {
         match kargo_json(&args).await {
             Ok(v) => for stage in list_items(&v) {
                 if let Some(name) = stage.pointer("/metadata/name").and_then(Value::as_str) {
-                    infos.insert(name.to_string(), stage_info(stage));
+                    infos.insert(name.to_string(),
+                                 stage_info(stage, stage_repo.get(name).copied()));
                 }
             },
             Err(e) => errors.push(e),
@@ -341,8 +372,8 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path) -> KargoStagesFile {
 
     let mut prs = Vec::new();
     for (repo_name, number, merge) in &prs_in {
-        let Some(repo) = config.repos.iter().find(|r| r.repo.eq_ignore_ascii_case(repo_name)) else { continue };
         let mut answers: HashMap<String, Option<bool>> = HashMap::new();
+        for repo in config.repos.iter().filter(|r| r.repo.eq_ignore_ascii_case(repo_name)) {
         for stage in &repo.stages {
             if let Some(rev) = infos.get(&repo.kargo_stage(stage)).and_then(|i| i.revision.clone()) {
                 if !answers.contains_key(&rev) {
@@ -362,11 +393,18 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path) -> KargoStagesFile {
             }
         }
         prs.push(pr);
+        }
     }
 
+    let mut repos: Vec<String> = Vec::new();
+    for r in &config.repos {
+        if !repos.iter().any(|x| x.eq_ignore_ascii_case(&r.repo)) {
+            repos.push(r.repo.clone());
+        }
+    }
     KargoStagesFile {
         updated: Utc::now(),
-        repos: config.repos.iter().map(|r| r.repo.clone()).collect(),
+        repos,
         prs,
         errors,
     }
@@ -401,7 +439,7 @@ mod tests {
         KargoRepo {
             repo: "o/fub".into(), project: "p".into(), warehouse: "fub".into(),
             stages: vec!["us-dev".into(), "us-stg".into(), "us-prd".into()],
-            stage_pattern: None,
+            stage_pattern: None, region: None,
         }
     }
 
@@ -440,24 +478,24 @@ mod tests {
     fn revision_prefers_the_annotation_then_tag_suffixes_then_commits() {
         let sha = "44b00c4e7c22cf1b22e72534b94a393603e5120f";
         assert_eq!(freight_revision(&json!({"images": [{"annotations":
-            {"org.opencontainers.image.revision": sha}}]})).as_deref(), Some(sha));
-        assert_eq!(freight_revision(&json!({"images": [{"tag": format!("2749.0.0-{sha}")}]})).as_deref(), Some(sha));
-        assert_eq!(freight_revision(&json!({"charts": [{"version": "12.0.0-r123.abc1234"}]})).as_deref(), Some("abc1234"));
-        assert_eq!(freight_revision(&json!({"commits": [{"id": sha}]})).as_deref(), Some(sha));
-        assert_eq!(freight_revision(&json!({"images": [{"tag": "0.398.0"}]})), None);
+            {"org.opencontainers.image.revision": sha}}]}), None).as_deref(), Some(sha));
+        assert_eq!(freight_revision(&json!({"images": [{"tag": format!("2749.0.0-{sha}")}]}), None).as_deref(), Some(sha));
+        assert_eq!(freight_revision(&json!({"charts": [{"version": "12.0.0-r123.abc1234"}]}), None).as_deref(), Some("abc1234"));
+        assert_eq!(freight_revision(&json!({"commits": [{"id": sha}]}), None).as_deref(), Some(sha));
+        assert_eq!(freight_revision(&json!({"images": [{"tag": "0.398.0"}]}), None), None);
     }
 
     #[test]
     fn stage_info_reads_verification_and_promotion() {
-        let i = stage_info(&stage("fub-us-dev-deploy", "abcdef1", Some("Successful"), ""));
+        let i = stage_info(&stage("fub-us-dev-deploy", "abcdef1", Some("Successful"), ""), None);
         assert_eq!(i.revision.as_deref(), Some("abcdef1"));
         assert!(i.verified && !i.promoting && !i.failed);
         assert_eq!(i.verified_at.as_deref(), Some("2026-11-18T02:21:45Z"));
-        let i = stage_info(&stage("x", "abcdef1", Some("Running"), ""));
+        let i = stage_info(&stage("x", "abcdef1", Some("Running"), ""), None);
         assert!(!i.verified && i.promoting);
-        let i = stage_info(&stage("x", "abcdef1", Some("Failed"), ""));
+        let i = stage_info(&stage("x", "abcdef1", Some("Failed"), ""), None);
         assert!(i.failed && !i.verified);
-        let i = stage_info(&stage("x", "abcdef1", None, "promo-1"));
+        let i = stage_info(&stage("x", "abcdef1", None, "promo-1"), None);
         assert!(i.verified && i.promoting, "no verification: promotion verifies");
         assert_eq!(i.verified_at.as_deref(), Some("2026-11-18T02:15:48Z"));
     }
@@ -467,7 +505,7 @@ mod tests {
         let v: Value = serde_json::from_str(include_str!("../tests/fixtures/kargo-stages.json")).unwrap();
         let items = list_items(&v);
         assert_eq!(items.len(), 3);
-        let i = stage_info(items[0]);
+        let i = stage_info(items[0], None);
         assert_eq!(i.revision.as_deref(), Some("44b00c4e7c22cf1b22e72534b94a393603e5120f"));
         assert!(i.verified);
     }
@@ -476,9 +514,9 @@ mod tests {
     fn a_pr_reaches_the_stages_whose_freight_contains_it() {
         let repo = fub();
         let infos: HashMap<String, StageInfo> = [
-            ("fub-us-dev-deploy", stage_info(&stage("", "new", Some("Successful"), ""))),
-            ("fub-us-stg-deploy", stage_info(&stage("", "new", Some("Running"), ""))),
-            ("fub-us-prd-deploy", stage_info(&stage("", "old", Some("Successful"), ""))),
+            ("fub-us-dev-deploy", stage_info(&stage("", "new", Some("Successful"), ""), None)),
+            ("fub-us-stg-deploy", stage_info(&stage("", "new", Some("Running"), ""), None)),
+            ("fub-us-prd-deploy", stage_info(&stage("", "old", Some("Successful"), ""), None)),
         ].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
         // The fixture's revisions are not hex, so supply them directly.
         let infos: HashMap<String, StageInfo> = infos.into_iter().map(|(k, mut v)| {
@@ -515,6 +553,46 @@ mod tests {
         };
         assert_eq!(first_verified(&info, |r| Some(r != "aaa")).as_deref(), Some("t2"));
         assert_eq!(first_verified(&info, |_| Some(false)).as_deref(), Some("t3"));
+    }
+
+    #[test]
+    fn the_repos_own_image_names_the_revision() {
+        // Shaped like the monolith freight: the app image, a shared sidecar
+        // from another repo, and a schema image from the same repo built at
+        // an older commit.
+        let ann = |src: &str, rev: &str| json!({"tag": format!("1.0.0-{rev}"), "annotations": {
+            "org.opencontainers.image.source": src,
+            "org.opencontainers.image.revision": rev}});
+        let item = json!({"images": [
+            ann("https://github.com/o/sidecar", "9995248caf2d2c0fc6b3c9f883b66f6c1225926b"),
+            ann("https://github.com/o/mono", "1f7d6a229ca9d74703e9333bebcac1ab8a17405b"),
+            ann("https://github.com/o/mono", "627961576f2bf0a4a946c99cbb8431d1a2020c0d")]});
+        assert_eq!(freight_revision(&item, Some("O/Mono")).as_deref(),
+                   Some("1f7d6a229ca9d74703e9333bebcac1ab8a17405b"));
+        assert_eq!(freight_revision(&item, None).as_deref(),
+                   Some("9995248caf2d2c0fc6b3c9f883b66f6c1225926b"), "no repo: first image");
+        assert_eq!(freight_revision(&item, Some("o/other")).as_deref(),
+                   Some("9995248caf2d2c0fc6b3c9f883b66f6c1225926b"), "no match: first image");
+    }
+
+    #[test]
+    fn a_regional_entry_carries_its_region() {
+        let repo = KargoRepo { region: Some("US".into()), ..fub() };
+        let pr = pr_stages(&repo, 7, "m", &HashMap::new(), |_| Some(true));
+        assert_eq!(pr.region.as_deref(), Some("US"));
+        let json = serde_json::to_value(&pr).unwrap();
+        assert_eq!(json["region"], "US");
+        let plain = serde_json::to_value(pr_stages(&fub(), 7, "m", &HashMap::new(), |_| None)).unwrap();
+        assert!(plain.get("region").is_none(), "no region, no key: old files unchanged");
+    }
+
+    #[test]
+    fn config_without_a_region_still_parses() {
+        let c: KargoConfig = serde_json::from_value(json!({"enabled": true, "repos": [
+            {"repo": "o/fub", "project": "p", "warehouse": "fub", "stages": ["us-dev"]},
+            {"repo": "o/fub", "project": "p", "warehouse": "fub-uk", "stages": ["uk-dev"], "region": "UK"}]})).unwrap();
+        assert_eq!(c.repos[0].region, None);
+        assert_eq!(c.repos[1].region.as_deref(), Some("UK"));
     }
 
     #[test]
