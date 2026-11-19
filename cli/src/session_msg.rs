@@ -272,6 +272,15 @@ pub fn detail(v: &Value) -> String {
     if !tags.is_empty() {
         out.push(format!("tags      {}", tags.join(", ")));
     }
+    if let Some(p) = v.get("plan").filter(|p| !p.is_null()) {
+        out.push(format!("plan      {}/{}", opt_i64(p, "done").unwrap_or(0), opt_i64(p, "total").unwrap_or(0)));
+        if let Some(c) = p.get("current").and_then(Value::as_str) {
+            out.push(format!("  now     {c}"));
+        }
+        if let Some(n) = p.get("next").and_then(Value::as_str) {
+            out.push(format!("  next    {n}"));
+        }
+    }
     if let Some(t) = v.get("tail").and_then(Value::as_str) {
         out.push(format!("tail      {}", t.replace('\n', " ")));
     }
@@ -860,6 +869,17 @@ mod tests {
             reason: reason.map(str::to_string),
             notify: true,
         }
+    }
+
+    #[test]
+    fn detail_shows_the_plan_current_and_next() {
+        let v = serde_json::json!({"id": "s", "plan": {"done": 1, "total": 3,
+                                    "current": "run tests", "next": "open PR"}});
+        let d = detail(&v);
+        assert!(d.contains("plan      1/3"), "{d}");
+        assert!(d.contains("  now     run tests"), "{d}");
+        assert!(d.contains("  next    open PR"), "{d}");
+        assert!(!detail(&serde_json::json!({"id": "s", "plan": null})).contains("plan "));
     }
 
     #[test]

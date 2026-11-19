@@ -432,7 +432,9 @@ only knew the first, so its goto refused every WIP row."
                (nth 0 (get-text-property pos 'decknix-layout-session))
                ;; The question line under a blocked session: RET and `i' act
                ;; on its session, though `n'/`p' pass over it.
-               (nth 0 (get-text-property pos 'decknix-layout-ask)))))
+               (nth 0 (get-text-property pos 'decknix-layout-ask))
+               ;; Likewise its current/next lines.
+               (nth 0 (get-text-property pos 'decknix-layout-line-of)))))
     (when (stringp b) (setq b (get-buffer b)))
     (and (bufferp b) (buffer-live-p b) b)))
 
@@ -1015,6 +1017,74 @@ the character it is inserted before."
         (forward-line 1))
       (set-marker end nil))))
 
+(declare-function decknix-agent-turn-plan "decknix-agent-turn-signals" (&optional buffer))
+
+(defcustom decknix-sidebar-item-lines t
+  "When non-nil, list what an item is doing and what comes next beneath it.
+At most two lines: the current step (amber in progress, red blocked, green
+done) and the next one (dim blue).  Sessions take them from their ACP plan,
+merged PRs from their deploy stage."
+  :type 'boolean
+  :group 'decknix-ship)
+
+(defconst decknix-sidebar-item-line-faces
+  '((doing   . (:foreground "#d7af5f"))
+    (blocked . (:foreground "#ff5f5f"))
+    (done    . (:foreground "#87af87"))
+    (next    . (:foreground "#5f87af")))
+  "Faces for the current and next lines under an item.")
+
+(defun decknix--layout-item-line (lead text kind width &rest props)
+  "Return LEAD and TEXT as one line fitted to WIDTH in KIND's face.
+PROPS are extra text properties."
+  (let* ((room (max 1 (- width (string-width lead))))
+         (text (replace-regexp-in-string "[\n\t]+" " " text))
+         (text (if (> (string-width text) room)
+                   (concat (truncate-string-to-width text (max 1 (1- room))) "…")
+                 text)))
+    (apply #'propertize (concat lead text)
+           'face (alist-get kind decknix-sidebar-item-line-faces)
+           'decknix-layout-item-line kind
+           props)))
+
+(defun decknix--layout-insert-item-lines (line-num width lines indent &rest props)
+  "Insert LINES, a list of (KIND . TEXT), under an item.  Returns LINE-NUM.
+At most two are drawn; INDENT prefixes each, PROPS are added to each."
+  (dolist (l (seq-take (seq-filter #'cdr lines) 2))
+    (insert (apply #'decknix--layout-item-line
+                   (concat indent (if (eq (car l) 'next) "next: " "▸ "))
+                   (cdr l) (car l) width props)
+            "\n")
+    (setq line-num (1+ line-num)))
+  line-num)
+
+(defun decknix--layout-session-lines (session)
+  "Return SESSION's current and next lines from its last plan.
+A session blocked on the user already shows its question, so only the next
+step is added beneath it."
+  (let* ((buf (decknix--layout-session-buffer session))
+         (plan (and buf (fboundp 'decknix-agent-turn-plan) (decknix-agent-turn-plan buf)))
+         (state (nth 3 session))
+         (total (plist-get plan :total))
+         (complete (and total (> total 0) (equal total (plist-get plan :completed)))))
+    (when plan
+      (list (cond ((decknix--layout-attention-p state) nil)
+                  ((plist-get plan :current) (cons 'doing (plist-get plan :current)))
+                  (complete (cons 'done (format "plan done %d/%d" total total))))
+            (and (plist-get plan :next) (cons 'next (plist-get plan :next)))))))
+
+(defun decknix--layout-pr-lines (pr)
+  "Return merged PR's current and next lines from its deploy stage."
+  (let ((ship (plist-get pr :ship)))
+    (when ship
+      (let* ((lines (decknix-ship-lines ship (decknix-ship-ticket-key (plist-get pr :pr))))
+             (state (plist-get lines :state))
+             (shipped (eq (plist-get pr :visibility) 'shipped)))
+        (list (and (not shipped)
+                   (cons (pcase state ('failed 'blocked) ('done 'done) (_ 'doing))
+                         (plist-get lines :current)))
+              (and (plist-get lines :next) (cons 'next (plist-get lines :next))))))))
+
 (defun decknix--layout-render-wip-session (line-num width row &optional right)
   "Render WIP session ROW with its question, agents and work.
 Returns LINE-NUM.  RIGHT replaces the state word on the right."
@@ -1040,6 +1110,10 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
     (setq line-num (1+ line-num))
     (when (decknix--layout-attention-p state)
       (setq line-num (decknix--layout-render-ask line-num width session)))
+    (when decknix-sidebar-item-lines
+      (setq line-num (decknix--layout-insert-item-lines
+                      line-num width (decknix--layout-session-lines session) "      "
+                      'decknix-layout-line-of session)))
     (setq line-num (decknix--layout-render-subagents line-num (nth 0 session) width))
     (dolist (claim (plist-get row :repos))
       (setq line-num (decknix--layout-render-claim
@@ -1349,7 +1423,11 @@ PROVENANCE marks whether this association is evidence or a guess."
                'decknix-hub-number (plist-get pr :number)
                'decknix-hub-url (alist-get 'url (plist-get pr :pr)))
               "\n")
-      (setq line-num (1+ line-num)))
+      (setq line-num (1+ line-num))
+      (when decknix-sidebar-item-lines
+        (setq line-num (decknix--layout-insert-item-lines
+                        line-num width (decknix--layout-pr-lines pr) "        "
+                        'decknix-hub-url (alist-get 'url (plist-get pr :pr))))))
     (dolist (wt shown-wts)
       (insert (propertize
                (format "    %s %-3s %s" (decknix--layout-wt-glyph wt)

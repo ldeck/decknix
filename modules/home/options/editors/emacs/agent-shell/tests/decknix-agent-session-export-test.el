@@ -127,6 +127,26 @@
                                                   decknix-agent-session-export-dir)))))
       (ignore buf))))
 
+(ert-deftest decknix-agent-session-export/plan-is-exported ()
+  "What the session is doing and will do next, from its last ACP plan."
+  (export-test-with-env
+    (let ((decknix-agent-session-export-plan-function
+           (lambda (_buf) '(:total 4 :completed 1 :current "run tests" :next nil))))
+      (export-test--session "lane" export-test--sid)
+      (decknix-agent-session-export-sweep 1000.0)
+      (let ((plan (plist-get (export-test--read (concat export-test--sid ".json")) :plan)))
+        (should (equal "run tests" (plist-get plan :current)))
+        (should-not (plist-get plan :next))
+        (should (= 1 (plist-get plan :done)))
+        (should (= 4 (plist-get plan :total)))))))
+
+(ert-deftest decknix-agent-session-export/no-plan-is-null ()
+  (export-test-with-env
+    (let ((decknix-agent-session-export-plan-function #'ignore))
+      (export-test--session "lane" export-test--sid)
+      (decknix-agent-session-export-sweep 1000.0)
+      (should-not (plist-get (export-test--read (concat export-test--sid ".json")) :plan)))))
+
 (ert-deftest decknix-agent-session-export/tags-are-exported ()
   "The file carries the tags the sidebar shows, so the CLI resolves a lane
 by the same tags even before its session id joins a store entry."

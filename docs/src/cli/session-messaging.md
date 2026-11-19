@@ -50,7 +50,7 @@ netfail             the last turn died on a network failure
 starting / dead     initialising / process gone
 ```
 
-`status` also shows how long it has been busy, when it last produced output, the current tool, the closing text, queued prompts and the last message delivered to it. `stale` means the Emacs heartbeat is old or from another Emacs, so the state cannot be trusted. `receiver: OFF` means messages would not be delivered.
+`status` also shows how long it has been busy, when it last produced output, the current tool, the closing text, queued prompts, the last message delivered to it, and its plan: entries done of total, the step in progress (`now`) and the first pending one (`next`), from the session's last ACP plan update (`plan: {current, next, done, total}` in the JSON, `null` when it has none). `stale` means the Emacs heartbeat is old or from another Emacs, so the state cannot be trusted. `receiver: OFF` means messages would not be delivered.
 
 ## Send
 

@@ -38,6 +38,29 @@ their PRs and worktrees nested under each, grouped like this:
 - `TAB` collapses a coordinator's lanes or a group; a collapsed group still
   shows its sessions that are blocked on you.
 
+## Now and next under each item
+
+Beneath a session and a merged PR, at most two lines say what it is doing and
+what comes next:
+
+```
+ ◐  hx-1610/fix-the-thing                working
+      ▸ run the integration tests             ← amber: in progress
+      next: open the PR                       ← dim blue
+    ■ →stg #812 HX-1610 add the thing
+        ▸ deploying us-stg
+        next: promote us-prd
+    ■ shipped #790 HX-1599 ...
+        next: close HX-1599                   ← its ticket is not Done yet
+```
+
+A session's lines come from its last ACP plan (the in-progress entry, then
+the first pending one); a blocked session keeps its question line and adds
+only the next step. A merged PR's come from its deploy stage and end with
+`close KEY` once shipped, when a Jira key in its title or branch names a
+ticket the hub still lists as not Done. Red marks a failed stage, green a
+completed one. `decknix-sidebar-item-lines` turns them off.
+
 ## Merged PRs: kept until shipped
 
 A merged PR stays under the session that raised it until its last deploy

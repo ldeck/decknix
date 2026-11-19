@@ -1025,5 +1025,61 @@ hides one silently; Reviews and WIP list only the board's sessions."
       (should (= 0 (decknix--layout-render-feed-errors 0 60)))
       (should (= 0 (buffer-size))))))
 
+;; --- current / next lines -----------------------------------------------
+
+(ert-deftest decknix-layout-render--a-working-session-shows-now-and-next ()
+  (decknix-lr-test--with-buffers '("*Claude: dk-plan*")
+    (cl-letf (((symbol-function 'decknix-agent-turn-plan)
+               (lambda (_b) '(:total 3 :completed 1 :current "run the tests" :next "open the PR"))))
+      (let* ((out (decknix-lr-test--render-wip '(("*Claude: dk-plan*" nil nil "working" nil nil))))
+             (lines (decknix-lr-test--lines out))
+             (row (seq-position lines "dk-plan" (lambda (l re) (string-match-p re l)))))
+        (should (string-match-p "▸ run the tests" (nth (+ 1 row) lines)))
+        (should (string-match-p "next: open the PR" (nth (+ 2 row) lines)))
+        (let ((pos (string-match "▸ run" out)))
+          (should (equal '(:foreground "#d7af5f") (get-text-property pos 'face out)))
+          (should (eq (get-buffer "*Claude: dk-plan*")
+                      (with-temp-buffer (insert out) (decknix-layout-buffer-at (1+ pos)))))
+          (should-not (with-temp-buffer (insert out) (decknix-layout-actionable-p (1+ pos)))))))))
+
+(ert-deftest decknix-layout-render--a-blocked-session-shows-only-its-next-step ()
+  (decknix-lr-test--with-buffers '("*Claude: dk-ask*")
+    (cl-letf (((symbol-function 'decknix-agent-turn-plan)
+               (lambda (_b) '(:total 2 :completed 0 :current "deciding" :next "ship"))))
+      (let ((out (decknix-lr-test--render-wip '(("*Claude: dk-ask*" nil nil "asking" nil nil)))))
+        (should-not (string-match-p "▸ deciding" out))
+        (should (string-match-p "next: ship" out))))))
+
+(ert-deftest decknix-layout-render--lines-can-be-turned-off ()
+  (decknix-lr-test--with-buffers '("*Claude: dk-off*")
+    (cl-letf (((symbol-function 'decknix-agent-turn-plan)
+               (lambda (_b) '(:total 1 :completed 0 :current "x" :next "y"))))
+      (let ((decknix-sidebar-item-lines nil))
+        (should-not (string-match-p "next: y"
+                                    (decknix-lr-test--render-wip
+                                     '(("*Claude: dk-off*" nil nil "working" nil nil)))))))))
+
+(ert-deftest decknix-layout-render--a-merged-pr-ends-with-closing-its-ticket ()
+  (let ((decknix-ship-ticket-open-function (lambda (k) (equal k "HX-1610"))))
+    (should (equal (decknix--layout-pr-lines
+                    (list :pr '((title . "HX-1610 thing"))
+                          :ship '(:state pending :current "us-stg" :next "us-prd"
+                                  :stages ("us-dev" "us-stg" "us-prd"))
+                          :visibility 'shipping))
+                   '((doing . "in us-stg") (next . "promote us-prd"))))
+    (should (equal (decknix--layout-pr-lines
+                    (list :pr '((title . "HX-1610 thing"))
+                          :ship '(:state done :current "us-prd") :visibility 'shipped))
+                   '(nil (next . "close HX-1610"))))
+    (should (eq 'blocked (car (car (decknix--layout-pr-lines
+                                    (list :pr nil :ship '(:state failed :next "us-stg")
+                                          :visibility 'shipping))))))))
+
+(ert-deftest decknix-layout-render--never-more-than-two-lines ()
+  (with-temp-buffer
+    (should (= 2 (decknix--layout-insert-item-lines
+                  0 40 '((doing . "a") (next . "b") (next . "c")) "  ")))
+    (should (= 1 (decknix--layout-insert-item-lines 0 40 '(nil (next . "b")) "  ")))))
+
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

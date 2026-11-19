@@ -246,26 +246,39 @@ last.  An empty TAIL changes nothing."
    (question (cons closing t))
    (t (cons tail nil))))
 
+(defun decknix--agent-plan-entry-text (entry)
+  "Return ENTRY's content as one trimmed line, or nil when it has none."
+  (let ((text (map-elt entry 'content)))
+    (and (stringp text)
+         (let ((line (string-trim (replace-regexp-in-string "[\n\t ]+" " " text))))
+           (and (not (string-empty-p line)) line)))))
+
 (defun decknix--agent-plan-progress (entries)
   "Return a progress plist for ACP plan ENTRIES, or nil when there are none.
 
-Plist is (:total N :completed N :in-progress N :pending N).  ENTRIES may
-be a vector (as decoded from JSON) or a list.  An unrecognised or missing
-status counts as PENDING, never as completed -- over-reporting completion
-would claim finished work that is not."
+Plist is (:total N :completed N :in-progress N :pending N :current TEXT
+:next TEXT).  :current is the first in-progress entry's text and :next the
+first pending entry's, each nil when there is none; the sidebar shows them
+under the session.  ENTRIES may be a vector (as decoded from JSON) or a
+list.  An unrecognised or missing status counts as PENDING, never as
+completed -- over-reporting completion would claim finished work that is
+not."
   (let ((items (cond ((vectorp entries) (append entries nil))
                      ((listp entries) entries)
                      (t nil))))
     (when items
-      (let ((total 0) (done 0) (doing 0) (todo 0))
+      (let ((total 0) (done 0) (doing 0) (todo 0) current next)
         (dolist (entry items)
           (setq total (1+ total))
           (pcase (map-elt entry 'status)
             ("completed"   (setq done (1+ done)))
-            ("in_progress" (setq doing (1+ doing)))
-            (_             (setq todo (1+ todo)))))
+            ("in_progress" (setq doing (1+ doing))
+             (unless current (setq current (decknix--agent-plan-entry-text entry))))
+            (_             (setq todo (1+ todo))
+             (unless next (setq next (decknix--agent-plan-entry-text entry))))))
         (list :total total :completed done
-              :in-progress doing :pending todo)))))
+              :in-progress doing :pending todo
+              :current current :next next)))))
 
 (defun decknix--agent-plan-complete-p (progress)
   "Return non-nil when PROGRESS shows every planned entry completed.
@@ -462,6 +475,12 @@ rebuild, and the text only changes at a turn boundary."
   (let ((buf (or buffer (current-buffer))))
     (and (buffer-live-p buf)
          (buffer-local-value 'decknix--agent-turn-answered buf))))
+
+(defun decknix-agent-turn-plan (&optional buffer)
+  "Return BUFFER's last plan progress plist, or nil.  No I/O."
+  (let ((buf (or buffer (current-buffer))))
+    (and (buffer-live-p buf)
+         (buffer-local-value 'decknix--agent-turn-plan buf))))
 
 (defun decknix-agent-turn-facts (&optional buffer)
   "Return the turn-end facts plist for BUFFER (default `current-buffer')."

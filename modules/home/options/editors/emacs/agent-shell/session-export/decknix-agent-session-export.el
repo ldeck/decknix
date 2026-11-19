@@ -106,6 +106,12 @@
   #'decknix-agent-session-export--sidebar-tags
   "Called with (BUFFER SESSION-ID); returns the session's tags or nil.")
 
+(declare-function decknix-agent-turn-plan "decknix-agent-turn-signals" (&optional buffer))
+
+(defvar decknix-agent-session-export-plan-function
+  (lambda (buf) (and (fboundp 'decknix-agent-turn-plan) (decknix-agent-turn-plan buf)))
+  "Function of a buffer returning its last ACP plan progress plist, or nil.")
+
 (defvar decknix-agent-session-export-write-function #'decknix-hub-cache-write-string
   "Called with (FILE TEXT &optional FORCE); writes only when TEXT changed.")
 
@@ -251,6 +257,16 @@ lookup per sweep."
                            (funcall decknix-agent-session-export-tags-function buf sid)
                          (error nil)))))
 
+(defun decknix-agent-session-export--plan (buf)
+  "BUF's plan as exported: {current, next, done, total}, or :null."
+  (let ((p (ignore-errors (funcall decknix-agent-session-export-plan-function buf))))
+    (if (and p (plist-get p :total))
+        (list :current (decknix-agent-session-export--json-value (plist-get p :current))
+              :next (decknix-agent-session-export--json-value (plist-get p :next))
+              :done (or (plist-get p :completed) 0)
+              :total (plist-get p :total))
+      :null)))
+
 (defun decknix-agent-session-export-snapshot (buf sid now)
   "Return the exported plist for BUF holding session SID at NOW."
   (with-current-buffer buf
@@ -297,6 +313,7 @@ lookup per sweep."
             :tail (decknix-agent-session-export--json-value
                    (decknix-agent-session-export--tail
                     (decknix-agent-session-export--closing buf)))
+            :plan (decknix-agent-session-export--plan buf)
             :queued (list :compose (or (and (fboundp 'decknix--compose-queue-count)
                                             (ignore-errors (decknix--compose-queue-count buf)))
                                        0)

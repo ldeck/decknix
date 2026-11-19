@@ -164,6 +164,29 @@ question lives at the end, so the end is what must survive."
     (should (= 1 (plist-get p :in-progress)))
     (should (= 1 (plist-get p :pending)))))
 
+(ert-deftest decknix-turn-signals--plan-keeps-current-and-next-text ()
+  "The in-progress entry is what it is doing; the first pending one is next."
+  (let ((p (decknix--agent-plan-progress
+            [((content . "done thing") (status . "completed"))
+             ((content . "  run the\n tests ") (status . "in_progress"))
+             ((content . "later") (status . "in_progress"))
+             ((content . "open the PR") (status . "pending"))
+             ((content . "ship it") (status . "pending"))])))
+    (should (equal "run the tests" (plist-get p :current)))
+    (should (equal "open the PR" (plist-get p :next)))))
+
+(ert-deftest decknix-turn-signals--plan-without-text-has-no-lines ()
+  (let ((p (decknix--agent-plan-progress
+            [((status . "completed")) ((content . "") (status . "pending"))])))
+    (should-not (plist-get p :current))
+    (should-not (plist-get p :next))))
+
+(ert-deftest decknix-turn-signals--plan-accessor-reads-the-buffer ()
+  (with-temp-buffer
+    (setq decknix--agent-turn-plan '(:total 1 :current "x"))
+    (should (equal "x" (plist-get (decknix-agent-turn-plan) :current))))
+  (should-not (decknix-agent-turn-plan (let ((b (generate-new-buffer "x"))) (kill-buffer b) b))))
+
 (ert-deftest decknix-turn-signals--plan-accepts-list-form ()
   "JSON may arrive as a vector or a list; both must count identically."
   (should (equal (decknix--agent-plan-progress
