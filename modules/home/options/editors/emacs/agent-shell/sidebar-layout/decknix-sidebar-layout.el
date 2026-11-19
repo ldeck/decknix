@@ -1680,6 +1680,56 @@ without paying for it twice."
            (plist-put (copy-sequence row) :repos claims)))
        session-rows))))
 
+(defun decknix--layout-fold-prs (prs key-of)
+  "Return PRS as render entries, folding those that share a KEY-OF value.
+Each entry is (:pr PR) or (:fold KEY :prs MEMBERS), a fold standing where
+its first member stood.  KEY-OF returns nil for a PR that keeps its own
+row; a key only one PR has is not folded.
+
+Seven merged PRs of one lane all read `US→prd' over `US: deploying prd',
+fourteen lines repeating one fact.  Folded, they are one row that expands."
+  (let ((folds (make-hash-table :test 'equal))
+        (order nil))
+    (dolist (p prs)
+      (let* ((key (funcall key-of p))
+             (fold (and key (gethash key folds))))
+        (cond ((null key) (push (list :pr p) order))
+              (fold (plist-put fold :prs (cons p (plist-get fold :prs))))
+              (t (let ((new (list :fold key :prs (list p))))
+                   (puthash key new folds)
+                   (push new order))))))
+    (mapcan (lambda (e)
+              (let ((members (reverse (plist-get e :prs))))
+                (cond ((plist-get e :pr) (list e))
+                      ((cdr members) (list (list :fold (plist-get e :fold) :prs members)))
+                      (t (list (list :pr (car members)))))))
+            (nreverse order))))
+
+(defun decknix--layout-pr-flags (pr)
+  "Return the marks PR carries that its stage does not: `↩', `✗ci'.
+A merged PR still owing a reply or failing CI says something a neighbour
+at the same stage may not."
+  (let ((raw (plist-get pr :pr)))
+    (string-join (delq nil (list (and (eq (alist-get 'needs_reply raw) t) "↩")
+                                 (and (equal (alist-get 'status (alist-get 'ci raw)) "fail")
+                                      "✗ci")))
+                 " ")))
+
+(defun decknix--layout-pr-fold-key (pr lines)
+  "Return what PR shares with PRs it may fold with, or nil to keep its row.
+LINES are its ship lines.  Only merged PRs fold, and only with PRs at an
+identical stage and next step carrying the same `decknix--layout-pr-flags',
+so one owing a reply among PRs that do not stays its own row.  A ticket
+to close is always its own row: it is the next thing to do."
+  (let ((ship (plist-get pr :ship)))
+    (and ship
+         (not (string-prefix-p "close " (or (plist-get lines :next) "")))
+         (list (plist-get pr :visibility)
+               (substring-no-properties (decknix-ship-label-full ship))
+               (plist-get lines :current)
+               (plist-get lines :next)
+               (decknix--layout-pr-flags pr)))))
+
 (defun decknix--layout-worst-severity (prs worktrees)
   "Return the worst severity across PRS and WORKTREES, or nil when both empty."
   (let ((ranks (append (mapcar #'decknix--layout-pr-severity prs)
@@ -1716,6 +1766,42 @@ make legible.")
   "Return the row glyph for STATE; a middot when there is no session."
   (or (alist-get state decknix-sidebar-layout-state-glyphs nil nil #'equal)
       "·"))
+
+(defconst decknix-sidebar-layout-state-short
+  '(("netfail" . "fail") ("waiting" . "wait") ("asking" . "ask")
+    ("updated" . "upd") ("working" . "work") ("finished" . "done")
+    ("ready" . "ready") ("closing" . "close"))
+  "Compact right-hand word per session state.
+The full words were clipped at the sidebar's width: `asking 1', `rea',
+`waiti'.  Five columns at most, so the status always fits beside a name.")
+
+(defun decknix--layout-state-short (state)
+  "Return STATE's compact right-hand word, or STATE itself when unknown."
+  (or (cdr (assoc state decknix-sidebar-layout-state-short)) state ""))
+
+(defun decknix--layout-fit-row (left name right width)
+  "Return LEFT, NAME and RIGHT as one row no wider than WIDTH.
+RIGHT keeps its width and NAME is truncated, so the status a reader
+scans down the right edge is never the part that is clipped."
+  (let* ((room (max 1 (- width (string-width left) (string-width right) 1)))
+         (name (if (> (string-width name) room)
+                   (concat (truncate-string-to-width name (max 1 (1- room))) "…")
+                 name))
+         (pad (max 1 (- width (string-width left) (string-width name)
+                        (string-width right)))))
+    (concat left name (make-string pad ?\s) right)))
+
+(defun decknix--layout-review-display-name (name repo)
+  "Return review session NAME without what its REPO group already says.
+`auto/#22261/upside/review' under `upside' is `#22261'; the legacy
+`pr-upside-22261' is the same.  Whatever else the name carries stays,
+so `group/auto/upside/review' reads `group'."
+  (let ((repo (downcase (or repo ""))))
+    (if (string-match (concat "\\`pr-" (regexp-quote repo) "-\\([0-9]+\\)\\'") name)
+        (concat "#" (match-string 1 name))
+      (let ((kept (seq-remove (lambda (seg) (member (downcase seg) (list "auto" "review" repo)))
+                              (split-string name "/" t))))
+        (if kept (string-join kept "/") name)))))
 
 (defun decknix--layout-count-label (prs worktrees)
   "Return a count label for PRS and WORKTREES, omitting a zero half.

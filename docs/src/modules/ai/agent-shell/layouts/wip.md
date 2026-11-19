@@ -12,15 +12,15 @@ their PRs and worktrees nested under each, grouped like this:
 ```
  WIP (6 — 1 need you)
  ▾ my-org (5)                         ← only when there are 2+ workspaces
- ●  coordinator/team/us   3 lanes ready
- ~ ⚑  us/lane-01                 asking   ← lane, placed by tags (~)
-        ↳ Ship it? (yes / no)  · reply yes/no
-   ◐  us/lane-02                working   ← lane, placed by a delivery
-   ●  lane-03/us                  ready
+ ●  coordinator/team/us    3 lanes ready
+   ~ ⚑  us/lane-01                ask 1h  ← lane, placed by tags (~)
+          ↳ Ship it? (yes / no)  · reply yes/no
+     ◐  us/lane-02                  work  ← lane, placed by a delivery
+     ●  lane-03/us                 ready
  ▾ individual (1)
- ●  docs/refresh                  ready
+ ●  docs/refresh                   ready
  ▾ tools (1)
- ●  dotfiles                      ready
+ ●  dotfiles                       ready
  ◌  no session              4 unattended
 ```
 
@@ -31,7 +31,14 @@ their PRs and worktrees nested under each, grouped like this:
   record is kept in memory, so after an Emacs restart a session tagged
   `lane-NN` is placed by sharing most tags with one coordinator in its
   workspace, and marked `~` until a message confirms it. A tie places it
-  nowhere.
+  nowhere. Lanes are indented four columns under their coordinator; the `~`
+  sits inside that indent, beside the glyph, so an inferred lane is nested
+  as deep as a confirmed one.
+- **Status** on the right is a compact word: `ask`, `wait`, `fail`, `upd`
+  (blocked on you, with how long while it waits), `work`, `done` (finished,
+  unread), `ready`, `close`. Its width is reserved, so a long name is
+  truncated rather than the status clipped. Rows are fitted to the window's
+  text width, which excludes a line-number gutter.
 - **Review sessions** are listed in Reviews, not here. The `0` toggle
   (`T` → Shared → wip reviews) adds them as a last `reviews` group per
   workspace.
@@ -47,9 +54,10 @@ what comes next:
  ◐  hx-1610/fix-the-thing                working
       ▸ run the integration tests             ← amber: in progress
       next: open the PR                       ← dim blue
-    ■ →stg #812 HX-1610 add the thing
-        ▸ deploying us-stg
-        next: promote us-prd
+    ■ ⇢prd #812 HX-1610 add the thing
+        next: promote us-prd                  ← a person promotes prd
+    ■ →prd #813 HX-1611 another thing
+        ▸ verifying us-prd                    ← the badge alone reads as deploying
     ■ shipped #790 HX-1599 ...
         next: close HX-1599                   ← its ticket is not Done yet
 ```
@@ -58,8 +66,29 @@ A session's lines come from its last ACP plan (the in-progress entry, then
 the first pending one); a blocked session keeps its question line and adds
 only the next step. A merged PR's come from its deploy stage and end with
 `close KEY` once shipped, when a Jira key in its title or branch names a
-ticket the hub still lists as not Done. Red marks a failed stage, green a
-completed one. `decknix-sidebar-item-lines` turns them off.
+ticket the hub still lists as not Done. A merged PR's current line is left
+out when it only restates the badge on its row; only `verifying` keeps it.
+The next line names what a person does: `deploy` a TeamCity environment,
+`promote` a Kargo stage, and nothing for a Kargo stage that promotes by
+itself. Red marks a failed stage, green a completed one.
+`decknix-sidebar-item-lines` turns them off.
+
+### Merged PRs at one stage fold into one row
+
+Merged PRs under one session and repo at an identical stage, with the same
+next step and the same marks (`↩` owing a reply, `✗ci` failing CI), fold
+into one summary row, collapsed by default; `TAB` or `RET` lists them, and
+hovering names their numbers and every region's stage:
+
+```
+    ▸ 6 PRs ↩ · UK: merged, not deployed
+        next: UK: deploy prd
+    ■ shipped #790 HX-1599 ...                ← its own row: a ticket to close
+        next: close HX-1599
+```
+
+A PR whose marks differ from its neighbours', or with a ticket to close,
+keeps its own row.
 
 ## Merged PRs: kept until shipped
 
@@ -68,8 +97,9 @@ stage is verified, then shows dimmed as `shipped` for the shipped-retention
 window, then drops. In place of its age the row shows the stage:
 
 ```
-    ■ →stg  #812 HX-1610 add the thing     promoting to stg (amber)
-    ■ ·prd  #812 ...                       waiting to be promoted (amber)
+    ■ →stg  #812 HX-1610 add the thing     deploying or verifying stg (amber)
+    ■ ⇢prd  #812 ...                       ready for a person to promote (orange)
+    ■ ·prd  #812 ...                       waiting for prd, which follows by itself (amber)
     ■ ✗test #812 ...                       failed at test (red)
     ■ merged #90 docs tweak                nothing to deploy (green)
     ■ shipped #77 ...                      shipped, dimmed until retention ends
@@ -77,7 +107,12 @@ window, then drops. In place of its age the row shows the stage:
 
 How a repo ships decides what "last stage" means:
 
-- **gitops**: ordered deploy stages from the hub's `kargo-stages.json`;
+- **gitops**: ordered deploy stages from the hub's `kargo-stages.json`. A
+  stage is `ready` when its promotion policy is manual and `pending` when it
+  promotes by itself; `deploying` only while a promotion runs and
+  `verifying` while the freight holding the merge is being verified. An
+  entry listing several regions' stages under no `region`
+  (`uk-dev us-dev uk-stg ...`) is read as one shipper per region;
 - **teamcity**: environments from `teamcity-deploys.json`, done once every
   production environment the repo deploys to holds the merge;
 - **ci**: a dependency bump in a repo with no deploy data, done when its
@@ -110,20 +145,19 @@ listed per region with no Emacs setting becomes one shipper per region
 automatically.
 
 The PR is shipped only when every shipper's last stage is verified. The row
-shows one token per shipper, region first, furthest behind first (failed,
-then least of its stages done), with the region dropped from stage names it
-repeats:
+shows the furthest-behind shipper (failed, then least of its stages done),
+region first and with the region dropped from stage names it repeats, and
+how many other shippers are done; hovering shows every shipper's token:
 
 ```
-    ■ US→stg AU✓prd UK✓prd #812 HX-1610 …  US promoting to stg, others shipped
-    ■ US✗prd AU·prd UK·prd #812 …          failed in US prd (red), so the PR is failed
+    ■ US→stg +2✓ #812 HX-1610 …   US deploying stg, two others shipped
+    ■ US✗prd #812 …               failed in US prd (red), so the PR is failed
 ```
 
-The current and next lines come from the furthest-behind shipper (`US: in
-stg`, `US: promote prd`); when it has nothing left to promote the next
-shipper still going supplies the next step, and once all are done the
-current line is `shipped to AU, UK, US`. A ship progress record updates the
-shipper whose stages name its `stage`.
+The badge, current line and next line all come from that one shipper
+(`UK⇢stg +1✓`, `UK: ready to promote stg`, `UK: promote stg`), and once all
+are done the current line is `shipped to AU, UK, US`. A ship progress
+record updates the shipper whose stages name its `stage`.
 
 A ship progress record,
 when present, wins over the deploy feeds: a ship workflow writes

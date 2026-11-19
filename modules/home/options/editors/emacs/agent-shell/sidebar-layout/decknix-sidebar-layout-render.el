@@ -182,7 +182,10 @@ Resolved from the buffer rather than from `window-width' with no argument:
 the render runs with whatever window is selected, so the bare call answered
 for the wrong one and padded every row to it."
   (let ((win (get-buffer-window (current-buffer))))
-    (if (window-live-p win) (window-width win) (window-width))))
+    ;; Not `window-width': that counts the line-number gutter, so with
+    ;; `display-line-numbers' on every row ran four columns past the edge
+    ;; and its right-hand status was the part cut off.
+    (if (window-live-p win) (window-max-chars-per-line win) (window-width))))
 
 (declare-function decknix-board-focus-active-p "decknix-board-focus" ())
 (declare-function decknix-board-focus-title "decknix-board-focus" ())
@@ -242,6 +245,7 @@ PR those filters exist to hide."
       items)))
 
 (defvar decknix--hub-wip)
+(defvar decknix--hub-jira-tasks)
 (defvar decknix--hub-kargo-stages)
 (defvar decknix--hub-token-quotas)
 (defvar decknix--agent-provider-id)
@@ -647,32 +651,37 @@ for a free-text question, which no quick key answers."
                 'decknix-layout-ask session
                 'help-echo "i for the full question")))
 
-(defun decknix--layout-attention-row (session width raw-keys &optional indent)
+(defun decknix--layout-session-status (session)
+  "Return SESSION's compact right-hand status: `ask 1h', `work', `ready'.
+The age is added while it waits on the user, which is when it matters."
+  (let* ((state (nth 3 session))
+         (buf (decknix--layout-session-buffer session))
+         (age (and (decknix--layout-attention-p state) buf
+                   (decknix-attention-age-label (decknix-attention-since buf)))))
+    (string-trim (concat (decknix--layout-state-short state) " " (or age "")))))
+
+(defun decknix--layout-attention-row (session width raw-keys &optional indent repo)
   "Return the row for SESSION, blocked on the user, fitted to WIDTH.
 
 INDENT prefixes the glyph; a single space by default.  A review session
 whose PR has left RAW-KEYS is still listed -- it IS blocked on a prompt --
-but dimmed and marked, since the answer is most likely to close it."
+but dimmed and marked, since the answer is most likely to close it.
+Under REPO's group the name drops what the group already says, so
+`auto/#22261/upside/review' reads `#22261'; help text keeps it whole."
   (let* ((state (nth 3 session))
          (buf (decknix--layout-session-buffer session))
          (gone (decknix--layout-session-pr-gone-p session raw-keys))
-         (age (decknix-attention-age-label (and buf (decknix-attention-since buf))))
-         (right (string-trim (concat state " " age (if gone " · PR gone" ""))))
+         (right (concat (decknix--layout-session-status session) (if gone " · PR gone" "")))
          (left (format "%s%s  " (or indent " ") (decknix--layout-state-glyph state)))
-         (room (max 1 (- width (string-width left) (string-width right) 1)))
-         (name (decknix--layout-short-name (nth 0 session)))
-         (name (if (> (string-width name) room)
-                   (concat (truncate-string-to-width name (max 1 (1- room))) "…")
-                 name))
-         (pad (max 1 (- width (string-width left) (string-width name)
-                        (string-width right)))))
-    (propertize (concat left name (make-string pad ?\s) right)
+         (full (decknix--layout-short-name (nth 0 session)))
+         (name (if repo (decknix--layout-review-display-name full repo) full)))
+    (propertize (decknix--layout-fit-row left name right width)
                 'face (if gone 'font-lock-comment-face
                         (decknix--layout-state-face state))
                 'decknix-layout-session session
                 'decknix-layout-buffer (nth 0 session)
                 'agent-shell-workspace-buffer buf
-                'help-echo "RET go to it · j next · i what it asks · y/1-9 answer")))
+                'help-echo (concat full "\nRET go to it · j next · i what it asks · y/1-9 answer"))))
 
 (defun decknix--layout-render-ask (line-num width session)
   "Insert what SESSION is asking, with the reply it wants.  Returns LINE-NUM.
@@ -691,9 +700,10 @@ can send the reply named."
       (1+ line-num))))
 
 (defun decknix--layout-render-attention-session (line-num width session raw-keys
-                                                         &optional indent)
-  "Insert SESSION's attention row and its question.  Returns LINE-NUM."
-  (insert (decknix--layout-attention-row session width raw-keys indent) "\n")
+                                                         &optional indent repo)
+  "Insert SESSION's attention row and its question.  Returns LINE-NUM.
+REPO names the Reviews group it is listed under, if any."
+  (insert (decknix--layout-attention-row session width raw-keys indent repo) "\n")
   (decknix--layout-render-ask (1+ line-num) width session))
 
 (defun decknix--layout-attention-reviews (sessions)
@@ -885,7 +895,7 @@ you must never be hidden by a judgement about its PR."
           (setq line-num (1+ line-num))
           (dolist (session (cdr (assoc repo placed)))
             (setq line-num (decknix--layout-render-attention-session
-                            line-num width session raw-keys "    ")))
+                            line-num width session raw-keys "    " repo)))
           (when (decknix--layout-expanded-p repo)
             (dolist (pr (plist-get group :prs))
               (insert (propertize (decknix--layout-pr-label pr width)
@@ -1073,14 +1083,41 @@ step is added beneath it."
                   (complete (cons 'done (format "plan done %d/%d" total total))))
             (and (plist-get plan :next) (cons 'next (plist-get plan :next)))))))
 
-(defun decknix--layout-pr-lines (pr)
-  "Return merged PR's current and next lines from its deploy stage."
-  (let ((ship (plist-get pr :ship)))
-    (when ship
-      (let* ((lines (decknix-ship-lines ship (decknix-ship-ticket-key (plist-get pr :pr))))
-             (state (plist-get lines :state))
-             (shipped (eq (plist-get pr :visibility) 'shipped)))
-        (list (and (not shipped)
+(defvar decknix--layout-pr-lines-memo (make-hash-table :test 'eq :weakness 'key)
+  "WIP PR plist -> (JIRA-FEED LINES . FOLD-KEY), valid while JIRA-FEED is current.
+The plists live in the memoised WIP tree, so they are the same objects on
+every paint until a feed changes; without this each paint rebuilt every
+merged PR's lines and fold key, which measured 0.7 ms a warm render.")
+
+(defun decknix--layout-pr-ship-info (pr)
+  "Return (LINES . FOLD-KEY) for WIP PR, memoised; nil when it has not merged.
+The Jira feed is part of the key because it decides `close KEY'."
+  (when (plist-get pr :ship)
+    (let ((tasks (bound-and-true-p decknix--hub-jira-tasks))
+          (hit (gethash pr decknix--layout-pr-lines-memo)))
+      (if (and hit (eq (car hit) tasks))
+          (cdr hit)
+        (let ((lines (decknix-ship-lines (plist-get pr :ship)
+                                         (decknix-ship-ticket-key (plist-get pr :pr)))))
+          (cdr (puthash pr (cons tasks (cons lines (decknix--layout-pr-fold-key pr lines)))
+                        decknix--layout-pr-lines-memo)))))))
+
+(defun decknix--layout-pr-ship-lines (pr)
+  "Return merged PR's ship lines (see `decknix-ship-lines'), or nil."
+  (car (decknix--layout-pr-ship-info pr)))
+
+(defun decknix--layout-pr-lines (pr &optional lines)
+  "Return merged PR's current and next lines from its deploy stage.
+LINES, when given, are its already computed ship lines.
+
+The current line is left out when it only restates the badge on the row
+above: `US→prd' over `US: deploying prd' said one thing twice, on every
+merged PR."
+  (let ((lines (or lines (decknix--layout-pr-ship-lines pr))))
+    (when lines
+      (let ((state (plist-get lines :state))
+            (shipped (eq (plist-get pr :visibility) 'shipped)))
+        (list (and (not shipped) (not (plist-get lines :restates))
                    (cons (pcase state ('failed 'blocked) ('done 'done) (_ 'doing))
                          (plist-get lines :current)))
               (and (plist-get lines :next) (cons 'next (plist-get lines :next))))))))
@@ -1091,13 +1128,11 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
   (let* ((session (plist-get row :session))
          (state (nth 3 session))
          (name (decknix--layout-short-name (nth 0 session)))
-         (left (format " %s  %s" (decknix--layout-state-glyph state) name))
-         (right (or right state ""))
-         (pad (max 1 (- width (string-width left) (string-width right)))))
-    ;; Coloured by state, not just bolded on attention.  At 48 columns
-    ;; the trailing status word is off-screen, so colour and the
-    ;; left-hand glyph are the only state the user can actually read.
-    (insert (propertize (concat left (make-string pad ?\s) right)
+         (left (format " %s  " (decknix--layout-state-glyph state)))
+         (right (or right (decknix--layout-session-status session))))
+    ;; Coloured by state as well as worded: the glyph and colour carry it
+    ;; even where a narrow window truncates the name.
+    (insert (propertize (decknix--layout-fit-row left name right width)
                         'face (decknix--layout-state-face state)
                         'decknix-layout-session session
                         'decknix-layout-buffer (nth 0 session)
@@ -1152,7 +1187,7 @@ collapsed team still lists any lane blocked on the user."
                     line-num width row
                     (and lanes (format "%d lane%s %s" (length lanes)
                                        (if (= 1 (length lanes)) "" "s")
-                                       (or (nth 3 session) "")))))
+                                       (decknix--layout-session-status session)))))
     (put-text-property start (point) 'decknix-layout-collapse-key
                        (concat "wip-collapsed:" key))
     (if collapsed
@@ -1168,12 +1203,16 @@ collapsed team still lists any lane blocked on the user."
       (dolist (lane lanes)
         (let ((lstart (point)))
           (setq line-num (decknix--layout-render-wip-session
-                          line-num (- width 2) (car lane)))
+                          line-num (- width 4) (car lane)))
           ;; Nested by indenting the lane's whole block, so its PRs and
           ;; worktrees stay beneath it.  A `~' marks a lane placed by its
-          ;; tags rather than by a message its coordinator sent.
-          (decknix--layout-indent-lines lstart (point) "  "
-                                        (if (eq (cdr lane) 'inferred) " ~" "  ")))))
+          ;; tags rather than by a message its coordinator sent; it sits
+          ;; inside the indent, beside the glyph, so an inferred lane is
+          ;; nested exactly as deep as an observed one.  At two columns
+          ;; with the `~' in the first, a lane's glyph sat one column from
+          ;; its coordinator's and the nesting did not read.
+          (decknix--layout-indent-lines lstart (point) "    "
+                                        (if (eq (cdr lane) 'inferred) "   ~" "    ")))))
     line-num))
 
 (defun decknix--layout-render-wip-workspace (line-num width ws raw-keys multi)
@@ -1354,9 +1393,16 @@ window, since the glyphs are the part worth keeping when space runs out."
          (title (if (> (string-width title) room)
                     (concat (truncate-string-to-width title (max 1 (1- room))) "…")
                   title))
-         (row (concat lead (propertize title 'face 'shadow))))
-    (if shipped
-        (propertize (substring-no-properties row) 'face 'font-lock-comment-face)
+         (row (concat lead (propertize title 'face 'shadow)))
+         (row (if shipped
+                  (propertize (substring-no-properties row) 'face 'font-lock-comment-face)
+                row)))
+    ;; The badge names only the furthest-behind region; every region's
+    ;; stage is here.
+    (if ship
+        (propertize row 'help-echo (concat (substring-no-properties
+                                            (decknix-ship-label-full ship))
+                                           "\n" (alist-get 'title raw "")))
       row)))
 
 (defun decknix--layout-render-claim (line-num width claim session
@@ -1415,19 +1461,21 @@ PROVENANCE marks whether this association is evidence or a guess."
                         'decknix-layout-session session)
             "\n")
     (setq line-num (1+ line-num))
-    (dolist (pr shown-prs)
-      (insert (propertize
-               (decknix--layout-pr-row pr width)
-               'decknix-hub-type 'wip
-               'decknix-hub-repo (plist-get pr :repo)
-               'decknix-hub-number (plist-get pr :number)
-               'decknix-hub-url (alist-get 'url (plist-get pr :pr)))
-              "\n")
-      (setq line-num (1+ line-num))
-      (when decknix-sidebar-item-lines
-        (setq line-num (decknix--layout-insert-item-lines
-                        line-num width (decknix--layout-pr-lines pr) "        "
-                        'decknix-hub-url (alist-get 'url (plist-get pr :pr))))))
+    (let* ((lines-of (mapcar (lambda (pr) (cons pr (decknix--layout-pr-ship-info pr)))
+                             shown-prs))
+           (entries (decknix--layout-fold-prs
+                     shown-prs (lambda (pr) (cddr (assq pr lines-of))))))
+      (dolist (entry entries)
+        (if (plist-get entry :pr)
+            (setq line-num (decknix--layout-render-pr
+                            line-num width (plist-get entry :pr)
+                            (cadr (assq (plist-get entry :pr) lines-of))))
+          (setq line-num (decknix--layout-render-fold
+                          line-num width entry
+                          (cadr (assq (car (plist-get entry :prs)) lines-of))
+                          (concat "fold:" (or (nth 0 session) "") ":"
+                                  (or (plist-get claim :repo) "") ":"
+                                  (format "%S" (plist-get entry :fold))))))))
     (dolist (wt shown-wts)
       (insert (propertize
                (format "    %s %-3s %s" (decknix--layout-wt-glyph wt)
@@ -1449,6 +1497,57 @@ PROVENANCE marks whether this association is evidence or a guess."
       (setq line-num (1+ line-num))))
   line-num)
 
+
+(defun decknix--layout-render-pr (line-num width pr &optional lines no-lines)
+  "Insert WIP PR's row, and unless NO-LINES its current and next lines.
+LINES are its ship lines when already computed.  Returns LINE-NUM."
+  (insert (propertize
+           (decknix--layout-pr-row pr width)
+           'decknix-hub-type 'wip
+           'decknix-hub-repo (plist-get pr :repo)
+           'decknix-hub-number (plist-get pr :number)
+           'decknix-hub-url (alist-get 'url (plist-get pr :pr)))
+          "\n")
+  (setq line-num (1+ line-num))
+  (when (and decknix-sidebar-item-lines (not no-lines))
+    (setq line-num (decknix--layout-insert-item-lines
+                    line-num width (decknix--layout-pr-lines pr lines) "        "
+                    'decknix-hub-url (alist-get 'url (plist-get pr :pr)))))
+  line-num)
+
+(defun decknix--layout-render-fold (line-num width fold lines key)
+  "Insert FOLD, merged PRs sharing one stage, as one summary row.
+LINES are the first member's ship lines, the same for every member; KEY
+toggles the list of members, collapsed by default.  The shared next step
+is drawn once, beneath the summary.  Returns LINE-NUM."
+  (let* ((prs (plist-get fold :prs))
+         (open (decknix--layout-expanded-p key))
+         (first (car prs))
+         (flags (decknix--layout-pr-flags first))
+         (text (format "    %s %d PRs%s · %s" (if open "▾" "▸") (length prs)
+                       (if (string-empty-p flags) "" (concat " " flags))
+                       (or (plist-get lines :current) "")))
+         (text (truncate-string-to-width text width nil nil "…")))
+    (insert (propertize text
+                        'face (if (eq (plist-get first :visibility) 'shipped)
+                                  'font-lock-comment-face
+                                (decknix--layout-severity-face
+                                 (decknix--layout-pr-severity first)))
+                        'decknix-layout-expand-key key
+                        'help-echo (concat (mapconcat (lambda (p) (format "#%s" (plist-get p :number)))
+                                                      prs " ")
+                                           "\n" (substring-no-properties
+                                                  (decknix-ship-label-full (plist-get first :ship)))
+                                           "\nTAB or RET to list them"))
+            "\n")
+    (setq line-num (1+ line-num))
+    (when (and decknix-sidebar-item-lines (plist-get lines :next))
+      (setq line-num (decknix--layout-insert-item-lines
+                      line-num width (list (cons 'next (plist-get lines :next))) "        ")))
+    (when open
+      (dolist (pr prs)
+        (setq line-num (decknix--layout-render-pr line-num width pr lines t))))
+    line-num))
 
 (defun decknix--layout-review-title (repo number)
   "Return the title of review request REPO#NUMBER from the reviews feed.

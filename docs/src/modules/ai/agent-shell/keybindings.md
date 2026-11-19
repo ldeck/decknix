@@ -209,7 +209,11 @@ has exactly one row, marked `⚑`, in the section that owns it: a review
 session under its repo in **Reviews** (collapsed or not), any other session
 in **WIP**. A review session whose PR has since merged or closed is still
 listed, its repo kept visible, dimmed and marked `PR gone`: it is still
-waiting on a prompt, though the answer is usually to close it. Under each,
+waiting on a prompt, though the answer is usually to close it. Under its
+repo a review session is named by what the repo does not already say:
+`auto/#22261/widget/review` reads `#22261  ask 1h`, with the full name on
+hover. Statuses are compact (`ask 1h`, `wait`, `work`, `ready`) and keep
+their width; a long name is truncated instead. Under each,
 one dimmed line says what it is asking: the permission it wants, or the
 question its last turn ended on, followed by the reply it expects (`reply
 1-3, rec 1`, `reply yes/edit/cancel`, `reply yes/no`) when `y` or a digit

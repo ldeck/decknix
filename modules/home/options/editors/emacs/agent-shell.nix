@@ -6997,7 +6997,7 @@ duration -- the most important number on this branch."
                      line-num
                      (max 24 (1- (let ((win (get-buffer-window (current-buffer))))
                                    (if (window-live-p win)
-                                       (window-width win)
+                                       (window-max-chars-per-line win)
                                      (window-width)))))
                      #'decknix--sidebar-render-checkpoint))
 

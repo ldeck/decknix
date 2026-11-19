@@ -24,6 +24,7 @@
 (defvar decknix--hub-reviews nil)
 (defvar decknix--hub-wip nil)
 (defvar decknix--hub-kargo-stages nil)
+(defvar decknix--hub-jira-tasks nil)
 ;; Upstream agent-shell-attention's pending table, special for the same reason.
 (defvar agent-shell-attention--pending nil)
 
@@ -139,7 +140,13 @@ every row 47 columns too wide and pushed its right-hand value out of view."
               (ignore-errors (window-resize win (- 40 (window-width win)) t t)))
             ;; Selected window is NOT the sidebar here, which is the case
             ;; that broke: the bare call would answer for the other one.
-            (should (= (window-width win) (decknix--layout-sidebar-width)))))
+            (should (= (window-max-chars-per-line win) (decknix--layout-sidebar-width)))
+            ;; The line-number gutter is not row width: counting it pushed
+            ;; every row's right-hand status past the edge.
+            (setq-local display-line-numbers t)
+            (should (<= (decknix--layout-sidebar-width)
+                        (- (window-width win)
+                           (with-selected-window win (ceiling (line-number-display-width 'columns))))))))
       (ignore-errors (delete-window (get-buffer-window buf)))
       (kill-buffer buf))))
 
@@ -576,14 +583,16 @@ answered \"No live agent buffer at point\"."
     (let* ((out (decknix-lr-test--render-reviews
                  '(("*Claude: pr-widget-1*" nil ("widget#1") "waiting"))
                  '(((repo . "ExampleOwner/widget") (number . 1)))))
-           (pos (string-match "pr-widget-1" out)))
+           (pos (string-match "#1" out)))
       (should (string-match-p "Reviews (1) — 1 need you" out))
       (should pos)
-      (should (string-match-p (concat "^    " decknix-attention-glyph "  pr-widget-1") out))
+      ;; Named by its PR alone: the repo is the group it sits under.
+      (should (string-match-p (concat "^    " decknix-attention-glyph "  #1 +wait") out))
+      (should (string-match-p "pr-widget-1" (get-text-property pos 'help-echo out)))
       (should (eq (get-buffer "*Claude: pr-widget-1*")
                   (get-text-property pos 'agent-shell-workspace-buffer out)))
-      ;; Collapsed: no PR rows.
-      (should-not (string-match-p "#1 " out)))))
+      ;; Collapsed: no PR rows, so `#1' is only the session's.
+      (should (= 1 (with-temp-buffer (insert out) (count-matches "#1" (point-min) (point-max))))))))
 
 (ert-deftest decknix-layout-render--a-blocked-review-on-a-merged-pr-is-not-hidden ()
   "The bug: pr-widget-21531 and friends asked for a decision, their PRs had
@@ -592,7 +601,7 @@ left the feed, and their repo folded into \"N more in flight\"."
     (let* ((out (decknix-lr-test--render-reviews
                  '(("*Claude: pr-widget-21531*" nil ("widget#21531") "asking"))
                  '(((repo . "ExampleOwner/other") (number . 5)))))
-           (pos (string-match "pr-widget-21531" out)))
+           (pos (string-match "#21531" out)))
       (should pos)
       (should (string-match-p "PR gone" out))
       (should (eq (get-buffer "*Claude: pr-widget-21531*")
@@ -602,7 +611,7 @@ left the feed, and their repo folded into \"N more in flight\"."
   (decknix-lr-test--with-buffers '("*Claude: pr-widget-1*")
     (let ((out (decknix-lr-test--render-reviews
                 '(("*Claude: pr-widget-1*" nil ("widget#1") "asking")))))
-      (should (string-match-p "pr-widget-1" out))
+      (should (string-match-p "#1" out))
       (should-not (string-match-p "PR gone" out)))))
 
 (ert-deftest decknix-layout-render--reviews-blocked-rows-are-ranked ()
@@ -612,7 +621,7 @@ left the feed, and their repo folded into \"N more in flight\"."
                   ("*Claude: pr-widget-2*" nil ("widget#2") "netfail"))
                 '(((repo . "ExampleOwner/widget") (number . 1))
                   ((repo . "ExampleOwner/widget") (number . 2))))))
-      (should (< (string-match "pr-widget-2" out) (string-match "pr-widget-1" out))))))
+      (should (< (string-match "#2 " out) (string-match "#1 " out))))))
 
 (ert-deftest decknix-layout-render--attention-rows-fit-the-width ()
   (decknix-lr-test--with-buffers '("*Claude: a-very-long-session-name/with/many/tags/indeed*")
@@ -673,7 +682,11 @@ left the feed, and their repo folded into \"N more in flight\"."
       (should (< (funcall at "coordinator/hx/us") (funcall at "us/lane-01")
                  (funcall at "lane-03/us") (funcall at "individual (1)")
                  (funcall at "solo")))
-      (should (string-match-p "^ ~ ⚑  us/lane-01" (nth (funcall at "us/lane-01") lines)))
+      ;; Nested four columns in, `~' or not: the coordinator's glyph is in
+      ;; column 1, every lane's in column 5.
+      (should (string-match-p "^   ~ ⚑  us/lane-01" (nth (funcall at "us/lane-01") lines)))
+      (should (= 1 (string-match "[^ ]" (nth (funcall at "coordinator/hx/us") lines))))
+      (should (= 5 (string-match "◐" (nth (funcall at "lane-03/us") lines))))
       (should (string-match-p "2 lanes" (nth (funcall at "coordinator/hx/us") lines)))
       ;; One workspace: no workspace heading.
       (should-not (string-match-p "▾ org" out))
@@ -686,7 +699,7 @@ left the feed, and their repo folded into \"N more in flight\"."
       (with-temp-buffer
         (insert out)
         (goto-char (point-min))
-        (re-search-forward "^ ~ ⚑  us/lane-01")
+        (re-search-forward "^   ~ ⚑  us/lane-01")
         (should (eq (get-buffer "*Claude: us/lane-01*")
                     (decknix-layout-buffer-at (line-beginning-position))))
         (should (decknix-layout-actionable-p (line-beginning-position)))))))
@@ -726,7 +739,7 @@ left the feed, and their repo folded into \"N more in flight\"."
                   '(("*Claude: a*" nil nil "ready" "/c/org/" nil)
                     ("*Claude: b*" nil nil "asking" "/t/tools/" nil)))))
         (should (string-match-p "▸ tools (1)" out))
-        (should (string-match-p "b +asking" out))))))
+        (should (string-match-p "b +ask" out))))))
 
 (ert-deftest decknix-layout-render--the-review-toggle-lists-review-sessions-last ()
   (decknix-lr-test--with-team
@@ -1061,25 +1074,118 @@ hides one silently; Reviews and WIP list only the board's sessions."
 
 (ert-deftest decknix-layout-render--a-merged-pr-ends-with-closing-its-ticket ()
   (let ((decknix-ship-ticket-open-function (lambda (k) (equal k "HX-1610"))))
+    ;; The current line restates the badge, so only the next step is drawn.
     (should (equal (decknix--layout-pr-lines
                     (list :pr '((title . "HX-1610 thing"))
                           :ship '(:state pending :current "us-stg" :next "us-prd"
                                   :stages ("us-dev" "us-stg" "us-prd"))
                           :visibility 'shipping))
-                   '((doing . "in us-stg") (next . "promote us-prd"))))
+                   '(nil (next . "promote us-prd"))))
     (should (equal (decknix--layout-pr-lines
                     (list :pr '((title . "HX-1610 thing"))
                           :ship '(:state done :current "us-prd") :visibility 'shipped))
                    '(nil (next . "close HX-1610"))))
-    (should (eq 'blocked (car (car (decknix--layout-pr-lines
-                                    (list :pr nil :ship '(:state failed :next "us-stg")
-                                          :visibility 'shipping))))))))
+    (should (equal '(nil (next . "fix and redeploy us-stg"))
+                   (decknix--layout-pr-lines
+                    (list :pr nil :ship '(:state failed :next "us-stg")
+                          :visibility 'shipping))))
+    ;; Verifying looks like deploying on the badge, so its line stays.
+    (should (equal '(doing . "verifying us-prd")
+                   (car (decknix--layout-pr-lines
+                         (list :pr nil :ship '(:state verifying :current "us-stg" :next "us-prd"
+                                               :kind gitops :manual nil
+                                               :stages ("us-dev" "us-stg" "us-prd"))
+                               :visibility 'shipping)))))))
 
 (ert-deftest decknix-layout-render--never-more-than-two-lines ()
   (with-temp-buffer
     (should (= 2 (decknix--layout-insert-item-lines
                   0 40 '((doing . "a") (next . "b") (next . "c")) "  ")))
     (should (= 1 (decknix--layout-insert-item-lines 0 40 '(nil (next . "b")) "  ")))))
+
+;; --- folded merged PRs, compact badge, unclipped status ----------------
+
+(defun decknix-lr-test--merged (n ship &optional extra visibility)
+  "A merged WIP PR plist numbered N with SHIP status and EXTRA raw fields."
+  (list :repo "o/mono" :number n :branch (format "b-%d" n)
+        :pr (append extra `((number . ,n) (state . "MERGED") (title . ,(format "HX-%d thing" n))))
+        :ship ship :visibility (or visibility 'shipping)))
+
+(defconst decknix-lr-test--deploying
+  '(:kind gitops :region "US" :state deploying :current "us-stg" :next "us-prd"
+    :stages ("us-dev" "us-stg" "us-prd") :manual nil))
+
+(defun decknix-lr-test--render-claim (prs)
+  "Return PRS rendered as one claim under a session."
+  (with-temp-buffer
+    (decknix--layout-render-claim-1
+     0 60 (list :repo "mono" :prs (length prs) :worktrees 0 :pr-items prs :wt-items nil)
+     '("*Claude: lane*") 'observed)
+    (buffer-string)))
+
+(ert-deftest decknix-layout-render--merged-prs-at-one-stage-fold-into-one-row ()
+  (let* ((decknix--layout-expanded (make-hash-table :test 'equal))
+         (decknix-ship-ticket-open-function (lambda (k) (equal k "HX-3")))
+         (prs (list (decknix-lr-test--merged 1 decknix-lr-test--deploying)
+                    (decknix-lr-test--merged 2 decknix-lr-test--deploying)
+                    (decknix-lr-test--merged 3 '(:kind gitops :state done :current "us-prd"
+                                                 :stages ("us-dev" "us-stg" "us-prd"))
+                                             nil 'shipped)
+                    (decknix-lr-test--merged 4 decknix-lr-test--deploying)
+                    (decknix-lr-test--merged 5 decknix-lr-test--deploying '((needs_reply . t)))))
+         (out (decknix-lr-test--render-claim prs))
+         (pos (string-match "▸ 3 PRs · US: deploying prd" out)))
+    (should pos)
+    (should-not (string-match-p "#2 HX-2" out))
+    ;; A ticket to close and an owed reply keep their own rows.
+    (should (string-match-p "#3 HX-3" out))
+    (should (string-match-p "next: close HX-3" out))
+    (should (string-match-p "#5 HX-5" out))
+    (should (string-match-p "#1 #2 #4" (get-text-property pos 'help-echo out)))
+    ;; Two owing a reply fold together, marked, apart from the rest.
+    (let ((replied (decknix-lr-test--render-claim
+                    (list (decknix-lr-test--merged 6 decknix-lr-test--deploying '((needs_reply . t)))
+                          (decknix-lr-test--merged 7 decknix-lr-test--deploying '((needs_reply . t)))
+                          (decknix-lr-test--merged 8 decknix-lr-test--deploying)))))
+      (should (string-match-p "▸ 2 PRs ↩ · US: deploying prd" replied))
+      (should (string-match-p "#8 HX-8" replied)))
+    ;; TAB or RET on the summary lists the members.
+    (puthash (get-text-property pos 'decknix-layout-expand-key out) t decknix--layout-expanded)
+    (let ((open (decknix-lr-test--render-claim prs)))
+      (should (string-match-p "▾ 3 PRs" open))
+      (should (string-match-p "#2 HX-2" open)))))
+
+(ert-deftest decknix-layout-render--a-multi-region-badge-is-compact-with-detail-in-help ()
+  (let* ((us decknix-lr-test--deploying)
+         (au '(:kind teamcity :region "AU" :state done :current "production"
+               :stages ("development" "production")))
+         (uk '(:kind teamcity :region "UK" :state done :current "uk_production"
+               :stages ("uk_production")))
+         (pr (decknix-lr-test--merged 9 (decknix-ship-combine (list us au uk))))
+         (row (decknix--layout-pr-row pr 60)))
+    (should (string-match-p "US→prd \\+2✓ #9" row))
+    (should-not (string-match-p "AU✓" row))
+    (should (string-match-p "US→prd AU✓prd UK✓prd"
+                            (get-text-property (string-match "#9" row) 'help-echo row)))))
+
+(ert-deftest decknix-layout-render--a-session-status-is-never-clipped ()
+  (decknix-lr-test--with-buffers '("*Claude: a-very-long-lane-name/us/spike/onboard/more*")
+    (let* ((out (decknix-lr-test--render-wip
+                 '(("*Claude: a-very-long-lane-name/us/spike/onboard/more*" nil nil "asking" nil nil))))
+           (row (seq-find (lambda (l) (string-match-p "a-very" l)) (decknix-lr-test--lines out))))
+      (should (<= (string-width row) 48))
+      (should (string-match-p "… +ask\\( [0-9]+[smhd]\\)?\\'" row)))))
+
+(ert-deftest decknix-layout-render--memoised-lines-follow-the-jira-feed ()
+  "Lines are memoised per PR, but a ticket closing must still drop `close'."
+  (let* ((pr (decknix-lr-test--merged 3 '(:kind gitops :state done :current "us-prd"
+                                          :stages ("us-dev" "us-prd"))
+                                      nil 'shipped))
+         (decknix--hub-jira-tasks '((items . (((key . "HX-3") (status_category . "indeterminate")))))))
+    (should (equal "close HX-3" (plist-get (decknix--layout-pr-ship-lines pr) :next)))
+    (should (eq (decknix--layout-pr-ship-info pr) (decknix--layout-pr-ship-info pr)))
+    (setq decknix--hub-jira-tasks '((items . (((key . "HX-3") (status_category . "done"))))))
+    (should-not (plist-get (decknix--layout-pr-ship-lines pr) :next))))
 
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

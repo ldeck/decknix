@@ -1763,5 +1763,61 @@ repos holding eight bot PRs awaiting review looked like nothing at all."
       (should (= 2 (let ((decknix-sidebar-shipped-retention 3600)) (funcall count))))
       (should (= 1 (let ((decknix-sidebar-shipped-retention 60)) (funcall count)))))))
 
+;; --- compact rows: status words, names under a repo, folded PRs ---------
+
+(ert-deftest decknix-layout--state-words-are-compact ()
+  (should (equal "ask" (decknix--layout-state-short "asking")))
+  (should (equal "wait" (decknix--layout-state-short "waiting")))
+  (should (equal "work" (decknix--layout-state-short "working")))
+  (should (equal "ready" (decknix--layout-state-short "ready")))
+  (should (equal "odd" (decknix--layout-state-short "odd")))
+  (should (equal "" (decknix--layout-state-short nil)))
+  (dolist (cell decknix-sidebar-layout-state-short)
+    (should (<= (string-width (cdr cell)) 5))))
+
+(ert-deftest decknix-layout--a-fitted-row-truncates-the-name-not-the-status ()
+  "The bug: `asking 1', `rea', `waiti' -- the status was what got clipped."
+  (let ((row (decknix--layout-fit-row " ⚑  " (make-string 80 ?x) "ask 1h" 40)))
+    (should (= 40 (string-width row)))
+    (should (string-suffix-p " ask 1h" row))
+    (should (string-match-p "x…" row)))
+  (let ((row (decknix--layout-fit-row " ●  " "short" "ready" 40)))
+    (should (= 40 (string-width row)))
+    (should (string-prefix-p " ●  short " row))))
+
+(ert-deftest decknix-layout--a-review-name-drops-what-its-group-says ()
+  (should (equal "#22261" (decknix--layout-review-display-name "auto/#22261/upside/review" "upside")))
+  (should (equal "#7" (decknix--layout-review-display-name "auto/#7/Experiment-Nix/review" "experiment-nix")))
+  (should (equal "group" (decknix--layout-review-display-name "group/auto/widget/review" "widget")))
+  (should (equal "#21531" (decknix--layout-review-display-name "pr-widget-21531" "widget")))
+  (should (equal "free-form" (decknix--layout-review-display-name "free-form" "widget"))))
+
+(ert-deftest decknix-layout--prs-sharing-a-key-fold-where-the-first-stood ()
+  (let* ((key (lambda (p) (plist-get p :k)))
+         (prs (list '(:n 1 :k a) '(:n 2 :k nil) '(:n 3 :k a) '(:n 4 :k b) '(:n 5 :k a)))
+         (out (decknix--layout-fold-prs prs key)))
+    (should (equal (mapcar (lambda (e) (if (plist-get e :pr)
+                                           (plist-get (plist-get e :pr) :n)
+                                         (mapcar (lambda (p) (plist-get p :n)) (plist-get e :prs))))
+                           out)
+                   '((1 3 5) 2 4)))))
+
+(ert-deftest decknix-layout--a-pr-with-something-of-its-own-does-not-fold ()
+  (let ((ship '(:kind gitops :state deploying :next "us-prd"))
+        (lines '(:current "US: deploying prd" :next nil)))
+    (should (decknix--layout-pr-fold-key (list :ship ship :pr nil) lines))
+    (should-not (decknix--layout-pr-fold-key (list :ship nil :pr nil) lines))
+    ;; Owing a reply or failing CI parts a PR from neighbours that do not,
+    ;; and folds it with neighbours that do.
+    (let ((plain (decknix--layout-pr-fold-key (list :ship ship :pr nil) lines))
+          (reply (decknix--layout-pr-fold-key (list :ship ship :pr '((needs_reply . t))) lines))
+          (ci (decknix--layout-pr-fold-key (list :ship ship :pr '((ci . ((status . "fail"))))) lines)))
+      (should-not (equal plain reply))
+      (should-not (equal plain ci))
+      (should (equal reply (decknix--layout-pr-fold-key
+                            (list :ship ship :pr '((needs_reply . t) (number . 2))) lines))))
+    (should-not (decknix--layout-pr-fold-key (list :ship ship :pr nil)
+                                             '(:current "US: shipped" :next "close HX-1")))))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here
