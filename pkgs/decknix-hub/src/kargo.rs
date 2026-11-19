@@ -12,6 +12,15 @@
 // stage chain, with a `region` label); every regional entry becomes its own
 // PR entry, so the sidebar can track each region as a separate shipper.
 //
+// A stage that already verified freight holding the merge stays reached while
+// newer freight verifies there.  Reading only the newest freight made every
+// merged PR fall back to "deploying" each time a later merge rolled through,
+// which on a busy repo is most of the day.
+//
+// Which stages promote automatically comes from the project's ProjectConfig
+// promotion policies; the others are listed as `manual`, so the sidebar can
+// say a merge is ready for a person to promote rather than in progress.
+//
 // Writes kargo-stages.json.  A missing or unauthenticated `kargo` degrades to
 // an `errors` entry; the repo list is still written so the sidebar knows
 // those repos ship through Kargo and shows their merges as pending.
@@ -19,7 +28,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
@@ -93,9 +102,16 @@ pub struct KargoPr {
     pub stages: Vec<String>,
     /// Stages whose current freight contains the merge and passed verification.
     pub reached: Vec<String>,
-    /// Stages promoting or verifying freight right now.
+    /// Stages running a promotion right now.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub promoting: Vec<String>,
+    /// Stages holding the merge whose verification has not passed yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verifying: Vec<String>,
+    /// Stages that wait for a person to promote them.  Absent when the
+    /// project's promotion policies could not be read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manual: Option<Vec<String>>,
     /// Stages whose last promotion or verification failed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed: Vec<String>,
@@ -110,7 +126,10 @@ pub struct StageInfo {
     pub revision: Option<String>,
     pub verified: bool,
     pub verified_at: Option<String>,
+    /// A promotion is running (`currentPromotion` is set).
     pub promoting: bool,
+    /// The current freight's verification is running or pending.
+    pub verifying: bool,
     pub failed: bool,
     /// Earlier freight this stage verified, newest first, as (revision, when).
     pub history: Vec<(String, String)>,
@@ -185,8 +204,8 @@ pub fn stage_info(stage: &Value, repo: Option<&str>) -> StageInfo {
     let vphase = verification.and_then(|v| v.get("phase")).and_then(Value::as_str);
     let promotion_phase = status.pointer("/lastPromotion/status/phase").and_then(Value::as_str);
     let promoting = status.pointer("/currentPromotion/name").and_then(Value::as_str)
-        .map(|n| !n.is_empty()).unwrap_or(false)
-        || matches!(vphase, Some("Running") | Some("Pending"));
+        .map(|n| !n.is_empty()).unwrap_or(false);
+    let verifying = matches!(vphase, Some("Running") | Some("Pending"));
     let failed = matches!(vphase, Some("Failed") | Some("Error") | Some("Errored"))
         || matches!(promotion_phase, Some("Failed") | Some("Errored"));
     // A stage with no verification configured is verified by its promotion.
@@ -211,7 +230,7 @@ pub fn stage_info(stage: &Value, repo: Option<&str>) -> StageInfo {
             Some((rev, v.get("finishTime").and_then(Value::as_str)?.to_string()))
         })
         .collect();
-    StageInfo { revision, verified, verified_at, promoting, failed, history }
+    StageInfo { revision, verified, verified_at, promoting, verifying, failed, history }
 }
 
 /// When the last stage first verified freight containing the merge: the
@@ -228,28 +247,50 @@ where
         .or_else(|| info.verified_at.clone())
 }
 
+/// The project's auto-promoting stage names, from a ProjectConfig object.
+/// A policy names its stage either as `stage` or as `stageSelector.name`.
+pub fn auto_stages(project_config: &Value) -> HashSet<String> {
+    project_config.pointer("/spec/promotionPolicies").and_then(Value::as_array)
+        .into_iter().flatten()
+        .filter(|p| p.get("autoPromotionEnabled").and_then(Value::as_bool) == Some(true))
+        .filter_map(|p| p.get("stage").and_then(Value::as_str)
+            .or_else(|| p.pointer("/stageSelector/name").and_then(Value::as_str)))
+        .map(str::to_string)
+        .collect()
+}
+
 /// Decide one PR's stages from each stage's info and a containment oracle.
+/// AUTO, when known, is the project's auto-promoting stage set.
 pub fn pr_stages<F>(repo: &KargoRepo, number: u64, merge: &str,
-                    infos: &HashMap<String, StageInfo>, mut contains: F) -> KargoPr
+                    infos: &HashMap<String, StageInfo>, auto: Option<&HashSet<String>>,
+                    mut contains: F) -> KargoPr
 where
     F: FnMut(&str) -> Option<bool>,
 {
     let mut reached = Vec::new();
     let mut promoting = Vec::new();
+    let mut verifying = Vec::new();
     let mut failed = Vec::new();
     let mut verified_at = None;
     for stage in &repo.stages {
         let Some(info) = infos.get(&repo.kargo_stage(stage)) else { continue };
         let holds = info.revision.as_deref().and_then(&mut contains).unwrap_or(false);
-        if holds && info.verified {
+        let held_before = info.history.first()
+            .and_then(|(rev, _)| contains(rev)).unwrap_or(false);
+        if holds && (info.verified || held_before) {
             reached.push(stage.clone());
-            verified_at = info.verified_at.clone();
+            verified_at = if info.verified { info.verified_at.clone() }
+                          else { info.history.first().map(|(_, at)| at.clone()) };
         } else if info.failed {
             failed.push(stage.clone());
-        } else if info.promoting || holds {
+        } else if info.promoting {
             promoting.push(stage.clone());
+        } else if holds {
+            verifying.push(stage.clone());
         }
     }
+    let manual = auto.map(|a| repo.stages.iter()
+        .filter(|s| !a.contains(&repo.kargo_stage(s))).cloned().collect());
     let all = reached.len() == repo.stages.len();
     KargoPr {
         repo: repo.repo.clone(),
@@ -259,6 +300,8 @@ where
         stages: repo.stages.clone(),
         reached,
         promoting,
+        verifying,
+        manual,
         failed,
         verified_at: if all { verified_at } else { None },
     }
@@ -355,6 +398,15 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path) -> KargoStagesFile {
             by_project.entry(r.project.as_str()).or_default().push(name);
         }
     }
+    let mut policies: HashMap<String, HashSet<String>> = HashMap::new();
+    for project in by_project.keys() {
+        let args = ["get", "projectconfig", "--project", project, "-o", "json"]
+            .map(str::to_string);
+        match kargo_json(&args).await {
+            Ok(v) => { policies.insert(project.to_string(), auto_stages(&v)); }
+            Err(e) => errors.push(e),
+        }
+    }
     for (project, names) in by_project {
         let mut args = vec!["get".to_string(), "stages".into(), "--project".into(), project.into()];
         args.extend(names);
@@ -375,13 +427,19 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path) -> KargoStagesFile {
         let mut answers: HashMap<String, Option<bool>> = HashMap::new();
         for repo in config.repos.iter().filter(|r| r.repo.eq_ignore_ascii_case(repo_name)) {
         for stage in &repo.stages {
-            if let Some(rev) = infos.get(&repo.kargo_stage(stage)).and_then(|i| i.revision.clone()) {
+            let Some(info) = infos.get(&repo.kargo_stage(stage)) else { continue };
+            // The freight verified before the current one is asked about only
+            // while the current one is unverified: that is the one case where
+            // it decides whether the stage still holds the merge.
+            let prior = (!info.verified).then(|| info.history.first().map(|(r, _)| r.clone())).flatten();
+            for rev in info.revision.iter().cloned().chain(prior) {
                 if !answers.contains_key(&rev) {
                     answers.insert(rev.clone(), revision_contains(&repo.repo, merge, &rev).await);
                 }
             }
         }
-        let mut pr = pr_stages(repo, *number, merge, &infos, |rev| answers.get(rev).copied().flatten());
+        let mut pr = pr_stages(repo, *number, merge, &infos, policies.get(&repo.project),
+                               |rev| answers.get(rev).copied().flatten());
         if pr.verified_at.is_some() {
             if let Some(last) = repo.stages.last().and_then(|s| infos.get(&repo.kargo_stage(s))) {
                 for (rev, _) in &last.history {
@@ -492,7 +550,7 @@ mod tests {
         assert!(i.verified && !i.promoting && !i.failed);
         assert_eq!(i.verified_at.as_deref(), Some("2026-11-18T02:21:45Z"));
         let i = stage_info(&stage("x", "abcdef1", Some("Running"), ""), None);
-        assert!(!i.verified && i.promoting);
+        assert!(!i.verified && i.verifying && !i.promoting, "verifying is not promoting");
         let i = stage_info(&stage("x", "abcdef1", Some("Failed"), ""), None);
         assert!(i.failed && !i.verified);
         let i = stage_info(&stage("x", "abcdef1", None, "promo-1"), None);
@@ -523,12 +581,13 @@ mod tests {
             v.revision = Some(if k.contains("prd") { "0ld0ld0".into() } else { "ae1ae1ae".into() });
             (k, v)
         }).collect();
-        let pr = pr_stages(&repo, 7, "m", &infos, |rev| Some(rev == "ae1ae1ae"));
+        let pr = pr_stages(&repo, 7, "m", &infos, None, |rev| Some(rev == "ae1ae1ae"));
         assert_eq!(pr.reached, vec!["us-dev".to_string()]);
-        assert_eq!(pr.promoting, vec!["us-stg".to_string()]);
+        assert_eq!(pr.verifying, vec!["us-stg".to_string()]);
+        assert!(pr.promoting.is_empty(), "no promotion is running");
         assert!(pr.failed.is_empty());
         assert_eq!(pr.verified_at, None, "only set once every stage is reached");
-        let all = pr_stages(&repo, 7, "m", &infos, |_| Some(true));
+        let all = pr_stages(&repo, 7, "m", &infos, None, |_| Some(true));
         assert_eq!(all.reached.len(), 2, "stg is still verifying");
     }
 
@@ -539,7 +598,7 @@ mod tests {
             (repo.kargo_stage(s), StageInfo { revision: Some("abcdef1".into()), verified: true,
                                               verified_at: Some(format!("t-{s}")), ..Default::default() })
         }).collect();
-        let pr = pr_stages(&repo, 7, "m", &infos, |_| Some(true));
+        let pr = pr_stages(&repo, 7, "m", &infos, None, |_| Some(true));
         assert_eq!(pr.reached.len(), 3);
         assert_eq!(pr.verified_at.as_deref(), Some("t-us-prd"));
     }
@@ -578,11 +637,11 @@ mod tests {
     #[test]
     fn a_regional_entry_carries_its_region() {
         let repo = KargoRepo { region: Some("US".into()), ..fub() };
-        let pr = pr_stages(&repo, 7, "m", &HashMap::new(), |_| Some(true));
+        let pr = pr_stages(&repo, 7, "m", &HashMap::new(), None, |_| Some(true));
         assert_eq!(pr.region.as_deref(), Some("US"));
         let json = serde_json::to_value(&pr).unwrap();
         assert_eq!(json["region"], "US");
-        let plain = serde_json::to_value(pr_stages(&fub(), 7, "m", &HashMap::new(), |_| None)).unwrap();
+        let plain = serde_json::to_value(pr_stages(&fub(), 7, "m", &HashMap::new(), None, |_| None)).unwrap();
         assert!(plain.get("region").is_none(), "no region, no key: old files unchanged");
     }
 
@@ -593,6 +652,54 @@ mod tests {
             {"repo": "o/fub", "project": "p", "warehouse": "fub-uk", "stages": ["uk-dev"], "region": "UK"}]})).unwrap();
         assert_eq!(c.repos[0].region, None);
         assert_eq!(c.repos[1].region.as_deref(), Some("UK"));
+    }
+
+    #[test]
+    fn a_stage_that_verified_the_merge_stays_reached_while_newer_freight_verifies() {
+        // us-prd verified freight `old1` holding the merge; freight `new1`,
+        // also holding it, is verifying now.  That is shipped, not deploying.
+        let repo = fub();
+        let mut infos: HashMap<String, StageInfo> = HashMap::new();
+        for s in &repo.stages {
+            infos.insert(repo.kargo_stage(s), StageInfo {
+                revision: Some("new1".into()), verifying: true,
+                history: vec![("old1".into(), format!("t-{s}"))], ..Default::default() });
+        }
+        let pr = pr_stages(&repo, 7, "m", &infos, None, |_| Some(true));
+        assert_eq!(pr.reached.len(), 3);
+        assert!(pr.verifying.is_empty() && pr.promoting.is_empty());
+        assert_eq!(pr.verified_at.as_deref(), Some("t-us-prd"));
+        // A merge only in the new freight is verifying, not reached.
+        let pr = pr_stages(&repo, 7, "m", &infos, None, |rev| Some(rev == "new1"));
+        assert!(pr.reached.is_empty());
+        assert_eq!(pr.verifying.len(), 3);
+    }
+
+    #[test]
+    fn freight_without_the_merge_verifying_is_not_this_prs_deploy() {
+        let repo = fub();
+        let infos: HashMap<String, StageInfo> = [(repo.kargo_stage("us-dev"), StageInfo {
+            revision: Some("other".into()), verifying: true, ..Default::default() })]
+            .into_iter().collect();
+        let pr = pr_stages(&repo, 7, "m", &infos, None, |_| Some(false));
+        assert!(pr.verifying.is_empty() && pr.promoting.is_empty() && pr.reached.is_empty());
+    }
+
+    #[test]
+    fn manual_stages_come_from_the_promotion_policies() {
+        let pc = json!({"spec": {"promotionPolicies": [
+            {"stage": "fub-us-dev-deploy", "autoPromotionEnabled": true},
+            {"stageSelector": {"name": "fub-us-stg-deploy"}, "autoPromotionEnabled": true},
+            {"stage": "fub-us-prd-deploy"}]}});
+        let auto = auto_stages(&pc);
+        assert_eq!(auto.len(), 2);
+        let pr = pr_stages(&fub(), 7, "m", &HashMap::new(), Some(&auto), |_| None);
+        assert_eq!(pr.manual, Some(vec!["us-prd".to_string()]));
+        let unknown = serde_json::to_value(pr_stages(&fub(), 7, "m", &HashMap::new(), None, |_| None)).unwrap();
+        assert!(unknown.get("manual").is_none(), "policies unread: no claim either way");
+        let all_auto: HashSet<String> = fub().stages.iter().map(|s| fub().kargo_stage(s)).collect();
+        let known = serde_json::to_value(pr_stages(&fub(), 7, "m", &HashMap::new(), Some(&all_auto), |_| None)).unwrap();
+        assert_eq!(known["manual"], json!([]), "known and none manual is an empty list");
     }
 
     #[test]
