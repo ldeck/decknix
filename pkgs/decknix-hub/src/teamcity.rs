@@ -678,8 +678,12 @@ pub async fn run_teamcity_adapter(
     let client = crate::http_client();
     let base = config.proxy_url.trim_end_matches('/').to_string();
 
-    // Discover repo → TC project mapping on startup (cached for lifetime)
-    let repo_tc_map = discover_repo_tc_mapping(&client, &base).await;
+    // Repo -> TC project mapping, rediscovered on every poll until one
+    // succeeds.  Discovered once at startup, a single failure -- the IAP
+    // proxy not yet up when the daemon starts -- left it empty for the
+    // daemon's lifetime, so deploy polling never ran and
+    // teamcity-deploys.json silently froze.
+    let mut repo_tc_map = HashMap::new();
 
     loop {
         let result = poll_teamcity_builds(&config, &dir).await;
@@ -717,16 +721,29 @@ pub async fn run_teamcity_adapter(
         update_meta(&meta, status.clone(), &dir).await;
 
         // Poll deploy status for WIP branches
-        if !repo_tc_map.is_empty() {
+        if repo_tc_map.is_empty() {
+            repo_tc_map = discover_repo_tc_mapping(&client, &base).await;
+        }
+        let deploys_status = |last_error: Option<String>| AdapterStatus {
+            name: "teamcity-deploys".into(),
+            last_poll: Some(Utc::now()),
+            ok: last_error.is_none(),
+            last_error,
+        };
+        if repo_tc_map.is_empty() {
+            update_meta(&meta, deploys_status(Some("no repo mapping: vcs-roots discovery failed".into())), &dir).await;
+        } else {
             let deploys = poll_deploy_status(&client, &base, &dir, &repo_tc_map).await;
             let deploy_count: usize = deploys.repos.iter()
                 .map(|r| r.branches.len())
                 .sum();
-            if let Err(e) = atomic_write_json(&dir, "teamcity-deploys.json", &deploys).await {
+            let write = atomic_write_json(&dir, "teamcity-deploys.json", &deploys).await;
+            if let Err(e) = &write {
                 eprintln!("hub: write teamcity-deploys.json: {e}");
             } else {
                 eprintln!("hub: tc deploys: {} repos, {} branches", deploys.repos.len(), deploy_count);
             }
+            update_meta(&meta, deploys_status(write.err().map(|e| format!("write error: {e}"))), &dir).await;
         }
 
         if once { return; }
