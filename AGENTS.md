@@ -61,7 +61,10 @@ non-negotiable. Specifically:
   in documentation rather than omitting them.
 - **Generated references**: the options reference is generated from the real
   module tree (`nix build .#docs-options`; `checks.<system>.docs-options-coverage`
-  fails when a module declares options the reference cannot see) and the CLI
+  fails when a module declares options the reference cannot see;
+  `checks.<system>.docs-options-regex-free` keeps regex builtins such as
+  `lib.hasInfix` out of the generator, because on Linux they overflow the
+  evaluator stack on large modules, which macOS never reproduces) and the CLI
   reference (`cli/reference.md`) is checked by `cargo test`; regenerate it with
   `DECKNIX_UPDATE_CLI_REFERENCE=1 cargo test cli_reference` after changing any
   clap definition. CI also runs `mdbook build` and a lychee link check on PRs.

@@ -87,9 +87,16 @@ let
     let
       nixFiles = lib.filter (f: lib.hasSuffix ".nix" (toString f))
         (lib.filesystem.listFilesRecursive (self + "/modules"));
+      # Plain substring search, not lib.hasInfix: that is a regex match, and
+      # libstdc++'s std::regex (Nix on Linux, so the docs CI runner) recurses
+      # once per character. On agent-shell.nix (~450KB) it overflows even a
+      # 64MB stack; macOS Nix uses libc++ and never shows it.
+      # tests/docs-options-regex-free.nix keeps regex out of this file.
+      contains = needle: text:
+        builtins.replaceStrings [ needle ] [ "" ] text != text;
       declares = f:
         let text = builtins.readFile f; in
-        lib.hasInfix "mkOption" text || lib.hasInfix "mkEnableOption" text;
+        contains "mkOption" text || contains "mkEnableOption" text;
     in
     map relativeDeclaration (lib.filter declares nixFiles);
 

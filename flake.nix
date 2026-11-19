@@ -98,6 +98,10 @@
         # keeps it complete (docs/generate-options.nix).
         packages.docs-options = docsOptions.json;
         checks.docs-options-coverage = docsOptions.coverage;
+        # macOS cannot reproduce the Linux-only regex stack overflow that
+        # docs CI hits, so keep regex out of the generator by inspection.
+        checks.docs-options-regex-free =
+          import ./tests/docs-options-regex-free.nix { inherit pkgs; };
 
         # Adoption tiers evaluate and gate the right components
         # (tests/adoption.nix).
