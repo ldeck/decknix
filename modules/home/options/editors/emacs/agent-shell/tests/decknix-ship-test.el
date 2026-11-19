@@ -143,7 +143,7 @@
     (should (equal (decknix-ship-lines '(:state pending :current "us-stg" :next "us-prd"
                                         :stages ("us-dev" "us-stg" "us-prd"))
                                        "HX-1610")
-                   '(:state pending :current "in us-stg" :next "promote us-prd")))
+                   '(:state pending :current "in us-stg" :next "promote us-prd" :restates t)))
     (should (equal (plist-get (decknix-ship-lines '(:state done :current "us-prd") "HX-1610")
                               :next)
                    "close HX-1610"))
@@ -209,8 +209,9 @@
     (should (equal (mapcar (lambda (x) (plist-get x :region)) (plist-get s :shippers))
                    '("US" "AU" "UK")))
     (should (equal (plist-get s :current) "us-dev"))
+    (should (equal "US→stg +2✓" (substring-no-properties (decknix-ship-label s))))
     (should (equal "US→stg AU✓prd UK✓prd"
-                   (substring-no-properties (decknix-ship-label s))))))
+                   (substring-no-properties (decknix-ship-label-full s))))))
 
 (ert-deftest decknix-ship--a-teamcity-shipper-follows-only-its-environments ()
   (let* ((decknix-ship-repo-shippers decknix-ship-test--shippers)
@@ -221,7 +222,8 @@
     (should-not (eq (plist-get s :state) 'done))
     (should (equal (plist-get (car (plist-get s :shippers)) :region) "UK"))
     (should (equal (plist-get s :next) "uk_production"))
-    (should (equal "UK·prd AU✓prd US✓prd" (substring-no-properties (decknix-ship-label s))))))
+    (should (equal "UK·prd +2✓" (substring-no-properties (decknix-ship-label s))))
+    (should (equal "UK·prd AU✓prd US✓prd" (substring-no-properties (decknix-ship-label-full s))))))
 
 (ert-deftest decknix-ship--shipped-only-when-every-shipper-is-done ()
   (let* ((decknix-ship-repo-shippers decknix-ship-test--shippers)
@@ -244,7 +246,7 @@
     (should (equal (plist-get (car (plist-get s :shippers)) :region) "US"))
     (should (equal (decknix-ship-lines s)
                    '(:state failed :current "US: failed in prd"
-                     :next "US: fix and redeploy prd")))
+                     :next "US: fix and redeploy prd" :restates t)))
     (should (= 0 (decknix-ship-severity s)))))
 
 (ert-deftest decknix-ship--lines-come-from-the-furthest-behind-shipper ()
@@ -255,7 +257,8 @@
                                                         "uk_production")
                                  (decknix-ship-test--kargo-us '("us-dev" "us-stg")))))
     (should (equal (decknix-ship-lines s "HX-1610")
-                   '(:state pending :current "US: in stg" :next "US: promote prd")))))
+                   '(:state pending :current "US: in stg" :next "US: promote prd"
+                     :restates t)))))
 
 (ert-deftest decknix-ship--a-missing-regional-entry-is-pending-with-configured-stages ()
   (let* ((decknix-ship-repo-shippers
@@ -265,7 +268,7 @@
                                  (decknix-ship-test--tc "production")
                                  '((repos . ("o/mono")) (prs . nil)))))
     (should (eq (plist-get s :state) 'pending))
-    (should (equal "US·dev AU✓prd" (substring-no-properties (decknix-ship-label s))))))
+    (should (equal "US·dev +1✓" (substring-no-properties (decknix-ship-label s))))))
 
 (ert-deftest decknix-ship--regional-kargo-entries-without-config-are-shippers ()
   (let* ((kargo `((repos . ("o/fub"))
@@ -275,7 +278,7 @@
                            (stages . ("us-dev" "us-prd")) (reached . nil))))))
          (s (decknix-ship-status "o/fub" (decknix-ship-test--pr) '(()) kargo)))
     (should (eq (plist-get s :kind) 'multi))
-    (should (equal "US·dev UK✓prd" (substring-no-properties (decknix-ship-label s))))))
+    (should (equal "US·dev +1✓" (substring-no-properties (decknix-ship-label s))))))
 
 (ert-deftest decknix-ship--ship-progress-updates-the-shipper-holding-its-stage ()
   (let* ((decknix-ship-repo-shippers decknix-ship-test--shippers)
@@ -286,7 +289,8 @@
                                  '((stage . "us-prd") (status . "verified")
                                    (verified_at . "2026-11-19T05:00:00Z")))))
     (should (eq (plist-get s :state) 'done))
-    (should (equal "AU✓prd UK✓prd US✓prd" (substring-no-properties (decknix-ship-label s))))))
+    (should (equal "AU✓prd +2✓" (substring-no-properties (decknix-ship-label s))))
+    (should (equal "AU✓prd UK✓prd US✓prd" (substring-no-properties (decknix-ship-label-full s))))))
 
 (ert-deftest decknix-ship--one-shipper-without-a-region-is-the-old-status ()
   (let* ((decknix-ship-repo-shippers '(("/fub\\'" (:kind gitops))))
@@ -296,6 +300,74 @@
          (s (decknix-ship-status "o/fub" (decknix-ship-test--pr) '(()) kargo)))
     (should (eq (plist-get s :kind) 'gitops))
     (should (equal "·us-stg" (substring-no-properties (decknix-ship-label s))))))
+
+;; --- verifying, manual stages, regions in one entry, TeamCity wording -------
+
+(defconst decknix-ship-test--web-entry
+  '((repo . "o/web") (number . 7) (merge_commit . "m")
+    (stages . ("uk-dev" "us-dev" "uk-stg" "us-stg" "uk-prd" "us-prd"))
+    (reached . ("uk-dev" "us-dev" "us-stg" "us-prd"))
+    (manual . ("uk-stg" "us-stg" "uk-prd")))
+  "Shaped like the live web entry: two regions interleaved, no region key.")
+
+(ert-deftest decknix-ship--regions-interleaved-in-one-entry-become-shippers ()
+  "The bug: badge `·uk-stg' with no region, over `in us-dev' and
+`promote uk-stg', because six stages of two regions read as one pipeline."
+  (let* ((kargo `((repos . ("o/web")) (prs . (,decknix-ship-test--web-entry))))
+         (s (decknix-ship-status "o/web" (decknix-ship-test--pr) '(()) kargo)))
+    (should (eq (plist-get s :kind) 'multi))
+    (should (equal '("UK" "US") (mapcar (lambda (x) (plist-get x :region))
+                                        (plist-get s :shippers))))
+    (should (equal "UK⇢stg +1✓" (substring-no-properties (decknix-ship-label s))))
+    (let ((lines (decknix-ship-lines s)))
+      (should (equal (plist-get lines :current) "UK: ready to promote stg"))
+      (should (equal (plist-get lines :next) "UK: promote stg")))
+    (should (= 1 (decknix-ship-severity s)))))
+
+(ert-deftest decknix-ship--a-region-keyed-or-single-region-entry-is-not-split ()
+  (should (= 1 (length (decknix-ship-split-regions
+                        '((region . "US") (stages . ("us-dev" "uk-dev")))))))
+  (should (= 1 (length (decknix-ship-split-regions '((stages . ("us-dev" "us-prd"))))))))
+
+(ert-deftest decknix-ship--verifying-is-not-deploying ()
+  (let* ((kargo '((repos . ("o/fub"))
+                  (prs . (((repo . "o/fub") (number . 7)
+                           (stages . ("us-dev" "us-stg" "us-prd"))
+                           (reached . ("us-dev" "us-stg")) (verifying . ("us-prd"))
+                           (manual . nil))))))
+         (s (decknix-ship-status "o/fub" (decknix-ship-test--pr) '(()) kargo))
+         (lines (decknix-ship-lines s)))
+    (should (eq (plist-get s :state) 'verifying))
+    (should (equal (plist-get lines :current) "verifying us-prd"))
+    (should-not (plist-get lines :restates))
+    (should-not (plist-get lines :next))))
+
+(ert-deftest decknix-ship--an-auto-stage-waits-without-asking-anyone ()
+  "us-prd promotes itself: nothing for a person to do, so no next step."
+  (let* ((kargo '((repos . ("o/fub"))
+                  (prs . (((repo . "o/fub") (number . 7) (region . "US")
+                           (stages . ("us-dev" "us-stg" "us-prd"))
+                           (reached . ("us-dev" "us-stg")) (manual . nil))))))
+         (lines (decknix-ship-lines
+                 (decknix-ship-status "o/fub" (decknix-ship-test--pr) '(()) kargo))))
+    (should (eq (plist-get lines :state) 'pending))
+    (should (equal (plist-get lines :current) "US: in stg, prd follows"))
+    (should-not (plist-get lines :next))))
+
+(ert-deftest decknix-ship--teamcity-deploys-rather-than-promotes ()
+  (let* ((decknix-ship-repo-shippers decknix-ship-test--shippers)
+         (s (decknix-ship-status "o/mono" (decknix-ship-test--pr)
+                                 (decknix-ship-test--tc "production")
+                                 (decknix-ship-test--kargo-us '("us-dev" "us-stg" "us-prd")
+                                                              'verified_at "2026-11-19T04:00:00Z"))))
+    (should (equal (plist-get (decknix-ship-lines s) :next) "UK: deploy prd"))))
+
+(ert-deftest decknix-ship--teamcity-compares-times-not-strings ()
+  "11:30+11:00 is 00:30Z, before the 01:00Z merge, though it sorts after."
+  (let* ((deploys (decknix-ship-test--deploys
+                   (decknix-ship-test--env "development" "SUCCESS" "2026-11-19T11:30:00+11:00")))
+         (s (decknix-ship-status "o/mono" (decknix-ship-test--pr) deploys '(()))))
+    (should-not (plist-get s :current))))
 
 (ert-deftest decknix-ship--times-parse-once-and-reject-junk ()
   (let ((decknix-ship--time-cache (make-hash-table :test 'equal)))

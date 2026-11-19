@@ -334,7 +334,7 @@ All state is stored in `~/.config/decknix/hub/`:
 | `github-issues.json` | Open GitHub issues assigned to you |
 | `task-chores.json` | Pending Taskwarrior chores |
 | `teamcity-builds.json` | TeamCity build status for WIP branches |
-| `kargo-stages.json` | Per merged PR in a Kargo repo (one entry per `region` when configured per region): `stages`, `reached` (holding the merge, verified), `promoting`, `failed`, and `verified_at` once the last stage verified it; `errors` when kargo failed |
+| `kargo-stages.json` | Per merged PR in a Kargo repo (one entry per `region` when configured per region): `stages`, `reached` (holding the merge and verified, now or by the freight verified before the current one), `promoting` (a promotion running), `verifying` (holding the merge, verification not passed yet), `failed`, `manual` (stages without auto-promotion in the project's ProjectConfig; absent when the policies could not be read), and `verified_at` once the last stage verified it; `errors` when kargo failed |
 | `meta.json` | Adapter health: last poll time, errors |
 
 Each adapter writes independently — a slow Jira poll won't block GitHub
