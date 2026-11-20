@@ -12,7 +12,9 @@ For coordinators, prefer `decknix session send` ([Session messaging](./session-m
 M-x decknix-agent-dispatch-mode
 ```
 
-It is off by default and never auto-enabled. Turning it on creates the private state directory, settles anything left over from a previous run as `unknown` or `not-sent` (never retried), and ignores every request created before that moment. Turning it off settles waiting requests as `not-sent`.
+It is off by default and never enabled at startup. Turning it on creates the private state directory, settles anything left over from a previous run as `unknown` or `not-sent` (never retried), and ignores every request created before that moment. Turning it off settles waiting requests as `not-sent`.
+
+An agent can also switch it with `decknix session dispatch on|off` ([Session messaging](./session-messaging.md#the-receiver)), through the control watcher (`decknix-agent-dispatch-control-mode`, on by default; disable it with `programs.emacs.decknix.agentShell.dispatch.remoteControl.enable = false`). The watcher delivers nothing itself, refuses requests created before it started, and records who armed the receiver (`human` or `control:<session>`). Agents are expected to ask you before turning it on.
 
 ## Send
 
@@ -40,3 +42,5 @@ Other commands: `cancel ID` (only before the receiver claims it), `sweep` (settl
 The session is absent, held by more than one buffer, or changed between claim and send. Its process is gone. You have typed something at the prompt that is not sent yet (it is left untouched). The request is stale, future-dated, tampered with, or its file is a symlink or not mode 0600. A busy session is waited on, never interrupted, and only until the request expires (only a version 2 `--when interrupt` request from `decknix session send` can interrupt, under the interrupt policy).
 
 Receipts live in `~/.local/state/decknix/agent-dispatch/receipts/` and never contain the prompt text.
+
+The same receiver also handles version 3 requests from `decknix session spawn` and `retire`, which start or quit lane sessions instead of prompting one; see [Session messaging](./session-messaging.md#scale-lanes-spawn-and-retire).

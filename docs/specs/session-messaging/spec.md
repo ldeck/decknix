@@ -1,4 +1,4 @@
-# Session messaging: lane state, durable delivery and interrupts
+# Session messaging: lane state, durable delivery, interrupts and lane lifecycle
 
 Status: implemented on `main` (local, not yet switched). Decisions marked **(user decision)** in section 8 ship with the defaults stated there.
 
@@ -29,7 +29,9 @@ Emacs writes one JSON file per live agent-shell session plus a heartbeat (module
 
 ```
 $XDG_STATE_HOME/decknix/sessions/        (default ~/.local/state, dir 0700, files 0600)
-  _emacs.json     {"v":1,"pid":…,"at":<epoch>,"interval":30,"receiver":true|false}
+  _emacs.json     {"v":1,"pid":…,"at":<epoch>,"interval":30,"receiver":true|false,
+                   "armed_at":<epoch>|null,"armed_by":"human"|"control:<id>"|null,
+                   "control":true|false,"remote_control":true|false}
   <session>.json  one per live session
 ```
 
@@ -66,7 +68,15 @@ send <target> (--message T | --message-file F | --stdin)
 message <id> [--json]                        receipt chain for one message
 watch <id>... [--until delivered|answered] [--timeout 2h]
 inbox [--session ID] [--json] [--clear]      notices pushed to the sender
+spawn --workspace DIR --tag a,b [--agent claude] [--name N] [--model M]
+      [--mode MODE] (--brief-file F | --stdin | -- <brief>) [--queue]
+      [--no-resume] [--wait 180] [--ttl 1h] [--from ID] [--json]
+retire <target> [--reason T] [--force] [--wait 60] [--json]
+dispatch status [--json] | dispatch on [--release-queued] [--wait 15]
+                         | dispatch off [--wait 15]
 ```
+
+Lifecycle and receiver control are section 10 (`cli/src/session_lifecycle.rs`).
 
 `<target>` is anything `decknix session find` accepts (full id, unique id prefix of 6+ characters, buffer name or its tag path, workspace path, or tags matched exactly, case-insensitively or normalised) that resolves to exactly one live session; see `cli/src/session_lookup.rs`. Anything ambiguous is an error that lists the candidates (exit 21), a miss lists the closest sessions (exit 20), and a saved-only match exits 22. The request file always names the full id, so the receiver's exact-identity rule is unchanged.
 
@@ -120,15 +130,58 @@ Always refused: a session interrupting itself; a lane interrupted less than `dec
 
 - Rust unit tests: target resolution, staleness, state rendering, request format and modes, `now` against a busy lane writes nothing, interrupt requires a reason, receipt merging including lazy expiry, notices.
 - ERT: export snapshot and state mapping, change-only writes, activity and tool tracking; dispatcher v2 validation, idle waiting on unsent input, `now` refusing a busy lane, interrupt policy, rate limit and loop guard, envelope, answered receipts and notices. Version 1 tests are unchanged except the version table.
+- Rust unit tests for section 10: request builders and validation, the idempotent `existing` plan writing nothing, ambiguous live and saved matches (21), saved resume and workspace mismatch (23), the receiver gate (14, 15, `--queue`), retire exactness, `dispatch on|off` no-ops and the missing watcher (16), spawned receipt merging.
+- ERT for section 10: the v3 validation table, policy, roots, cap and rate refusals, `existing` and ambiguous outcomes, the spawned receipt, timeout and buffer death, a resumed session's brief, predates-arming against `release_queued`, retire refusals (protected, unsent, busy, force, session changed); control on/off, remote control disabled, unsafe and expired requests; heartbeat arming fields; background resume taking no window. Every real session entry point is stubbed to error.
 - Full system build in the pre-commit gate.
 
 ## 8. Decisions
 
 - **(user decision)** Interrupt policy default `coordinator`, coordinator tag `coordinator`, interruptible tag `interruptible`, minimum interval 300 s.
-- **(user decision)** The dispatch receiver stays off until the human turns it on per Emacs run; the exporter is on by default. A coordinator that finds `receiver: false` in the heartbeat must ask the human; it cannot arm delivery itself, and `send` refuses (exit 14) rather than queue a request that arming would refuse. Auto-arming the receiver at startup would remove the "requests from before arming are refused" protection for anything queued while Emacs was down.
+- **(user decision, revised for section 10)** The dispatch receiver stays off on install and at startup; the exporter is on by default. Originally only the human could arm it. It can now also be armed by a `dispatch on` control request, through the separately enabled control watcher, so a coordinator that finds `receiver: false` asks the human in one line and, only after a yes, runs `decknix session dispatch on` itself. `send` still refuses (exit 14) rather than queue a request that arming would refuse. The receiver is still never armed automatically: control requests created before the watcher started are refused and live at most 300 s, so nothing queued while Emacs was down can arm it, and the "requests from before arming are refused" protection is kept except for spawns queued with `--queue` and released explicitly with `--release-queued`.
+- **(user decision)** Lifecycle policy default `coordinator` (the sender must carry a coordinator tag), spawn roots `~/Code` and `~/tools`, at most 12 live sessions, 10 s between spawns, protected tag `coordinator`. The control watcher runs by default (Nix option `programs.emacs.decknix.agentShell.dispatch.remoteControl.enable`); `decknix-agent-dispatch-remote-control` set to nil refuses remote `on` while still honouring `off`.
 - Background threshold 120 s and the 24 h idle TTL are variables (`decknix-agent-session-export-background-seconds`, CLI `--ttl`).
 - Interrupt cancels the whole turn, including background tasks the lane started (the transcript in incident 1 shows the sub-agent "stopped by the user" when the turn was cancelled). `status` shows `background` so the coordinator can weigh that cost.
 
 ## 9. Follow-up (not built)
 
 The agent bridge advertises `promptQueueing`: it accepts a new prompt while one is open and feeds it to the model at the next opportunity, the way a background agent's message reached the lane in incident 1. Using that for `background` lanes would deliver without cancelling anything, but shell-maker tracks one prompt per buffer and would need changes upstream. Until then, `background` plus `interrupt` is the coordinator's choice to make.
+
+## 10. Lane lifecycle and receiver control
+
+A coordinator that scales its lanes used to ask the human to open each session and later close it. Version 3 requests let it do both through the same private directory, with the receiver making the final checks against its own view of live sessions.
+
+### Requests
+
+```
+v: 3, id, kind, created_at, expires_at, [from, from_name]
+kind spawn     pending/   workspace, tags[], brief, brief_sha256,
+                          [agent, name, model, mode, resume_session_id, queue]
+kind retire    pending/   session_id, expect_tags[], [expect_buffer, reason, force]
+kind dispatch  control/   op on|off, [release_queued]
+```
+
+Spawn and retire live at most 24 h (CLI defaults: spawn 1 h, retire 1 h); control requests 300 s (CLI 60 s). A `dispatch` request in pending/ is refused (`bad-kind`).
+
+### Spawn
+
+The CLI resolves first: one live session whose tags include every requested tag (exactly or ignoring case; a normalised match such as `lane-7` for `lane-07` does not count) is printed with outcome `existing` and no request is written; several live matches exit 21. Otherwise one saved match is resumed (exit 23 when its recorded workspace differs; several saved matches exit 21 unless `--no-resume`). With the receiver off it exits 14, with no fresh heartbeat 15, unless `--queue`.
+
+The receiver then checks, in order: the lifecycle policy (`lifecycle-not-allowed`); the workspace is under `decknix-agent-dispatch-spawn-roots` (`workspace-not-allowed`) and exists (`no-workspace`); idempotency against live buffers (one match: outcome `existing`, no brief; several: `ambiguous-existing`; an accepted spawn for the same tags not yet confirmed: `spawn-in-progress`); the live-session cap (`too-many-sessions`) and the spawn interval (`spawn-rate-limited`). It then writes `receipts/<id>.json` (`accepted`, `kind: spawn`, `outcome: new|resumed|existing`) and starts the session in the background through the spawn throttle: a new one via the quick-action path with the brief as its first message, or the saved one via a background resume, whose brief is submitted once the resumed session has stayed idle for 4 s. The brief is prefixed with `[decknix spawn <id> from <sender>]`.
+
+`receipts/<id>.spawned.json` follows once the buffer has a session id: `{session_id, buffer, outcome}` (a resume adds `brief: delivered|not-delivered`), or `{state: spawn-failed, reason}` after 180 s without an id, when the buffer dies, or when the start fails. Disarming the receiver settles unconfirmed spawns `{state: unknown, reason: disarmed-before-confirmation}`. A spawn queued with `--queue` before the receiver was armed is released only when the arming control request carried `release_queued`; any other request created before arming is still refused.
+
+`decknix session message` reads a spawn as `launching` (exit 10) until the spawned file arrives, then `spawned` (0) or `spawn-failed` (11).
+
+### Retire
+
+The CLI needs exactly one live session named by full id, buffer name or tags at the exact or case-insensitive tier; an id prefix, a workspace or a normalised match exits 21 ("retire needs an exact target"). Retiring the calling session needs `--force`. The request carries the session's current tags and buffer name.
+
+The receiver refuses: policy (`lifecycle-not-allowed`); a self-retire without force (`retire-self-needs-force`); no or several buffers (`no-session`, `ambiguous-session`); tags no longer including `expect_tags`, a different buffer name or a swapped buffer (`session-changed`); a tag in `decknix-agent-dispatch-retire-protected-tags` (`protected-session`); text typed at the prompt, even with force (`unsent-input`). A busy session is waited on until idle or expiry (`expired-before-retire`) unless `force`. Then it quits the session through `decknix-session-lifecycle-quit` (broker stopped, buffer killed) and records `accepted` with `outcome: retired` only when the buffer is really gone, otherwise `unknown`. The saved record stays, so a later spawn with the same tags resumes it. `message` reads it as `retired`.
+
+### Receiver control
+
+`decknix-agent-dispatch-control-mode` (package `agent-shell/dispatch-control/`) checks control/ every 5 s (one directory stat when nothing changed) plus file-notify, claims a request by renaming it to `<id>.claimed`, applies the receiver's file checks (UUID name, 0600, owner, no symlink, size), and writes `receipts/<id>.json` with `kind: dispatch`. `op on` arms the receiver with `armed_by: control:<from>` (refused `remote-control-disabled` while `decknix-agent-dispatch-remote-control` is nil); `op off` disarms it, always. Requests created before the watcher started are refused (`predates-control`). The heartbeat is rewritten as soon as the receiver or the watcher toggles.
+
+`decknix session dispatch status` exits 0 when the receiver is on, 14 when off, 15 with no fresh heartbeat, and shows who armed it, whether the watcher runs, and request counts. `on` and `off` are no-ops (exit 0) when already in that state, exit 16 when the heartbeat shows no control watcher (only `M-x decknix-agent-dispatch-mode` can switch it then), and otherwise publish to control/, wait for the receipt and re-read the heartbeat. `off` first lists in-flight requests, which disarming settles `not-sent` (`disarmed`). The receipt reads `applied`.
+
+Agents must ask the human before `dispatch on` and say when they turn it off; that rule lives in the session-messaging skill, since the CLI cannot tell who typed the command.

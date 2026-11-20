@@ -1308,15 +1308,30 @@ attachment, or `claude --resume` against a running session:
 ~/.local/state/decknix/agent-dispatch/   (0700, checked at arm time)
   pending/   <id>.json     CLI writes (tmp file + hard link, 0600)
   inflight/  <id>.json     receiver claims by atomic rename
-             <id>.attempt  marker written just before the submit call
+             <id>.attempt  marker written just before the submit (or retire) call
   receipts/  <id>.json     one per request, never overwritten, no prompt text
+             <id>.answered.json / <id>.spawned.json   follow-ups
+  control/   <id>.json     `decknix session dispatch on|off`; the control
+                           watcher claims by rename to <id>.claimed
 ```
 
 Rules the code and tests pin (do not weaken):
 
 - **Inert on install.** The package defines functions and a global minor mode.
-  No timer, file watch or directory exists until someone runs
-  `M-x decknix-agent-dispatch-mode`. Nothing arms it automatically.
+  No timer, file watch or directory exists until it is armed, and nothing
+  arms it at startup. Arming is either the human (`M-x
+  decknix-agent-dispatch-mode`, `armed_by: human`) or a `dispatch on` control
+  request applied by the separately enabled control watcher
+  (`agent-shell/dispatch-control/`, `decknix-agent-dispatch-control-mode`,
+  started by default from the heredoc behind
+  `programs.emacs.decknix.agentShell.dispatch.remoteControl.enable`;
+  `armed_by: control:<sender>`). The watcher is the one relaxation of the
+  inert rule, and only because it delivers nothing: it refuses control
+  requests created before it started (so nothing queued while Emacs was
+  down arms the receiver), lives on one directory stat per 5 s, refuses
+  `on` while `decknix-agent-dispatch-remote-control` is nil, and always
+  honours `off`. Agents must ask the human before `dispatch on` (the
+  session-messaging skill says so; the CLI cannot tell who typed it).
 - **Exact identity.** `--session` must be the full lowercase UUID; a prefix,
   uppercase or trailing junk is refused. Zero or several live buffers holding
   it, or a different buffer than the one claimed, is refused. There is no
@@ -1348,18 +1363,49 @@ Rules the code and tests pin (do not weaken):
   interrupt reason. An accepted v2 request gains `receipts/<id>.answered.json`
   (closing text tail) when the turn ends or goes `background`, and with
   `notify` the sender gets files under `notices/<sender-id>/`.
+- **Spawn and retire are version 3 and policed.** `kind: spawn` and
+  `kind: retire` arrive in pending/ (`kind: dispatch` there is `bad-kind`),
+  both under `decknix-agent-dispatch-lifecycle-policy` (default
+  `coordinator`). Spawn: workspace under `decknix-agent-dispatch-spawn-roots`
+  and existing; one live buffer whose tags (via
+  `decknix-agent-dispatch-live-tags-function`, the sidebar resolver) cover
+  the request = outcome `existing`, no brief, nothing started; several =
+  `ambiguous-existing`; an unconfirmed spawn for the same tags =
+  `spawn-in-progress`; then the cap (`-spawn-max-live`, 12, counting
+  unstarted spawns) and interval (`-spawn-min-interval`, 10 s). The
+  accepted receipt is written BEFORE the start, so nothing restarts it; the
+  start goes through the spawn throttle in the background
+  (`decknix--agent-quickaction-start` with BACKGROUND, or
+  `decknix--agent-session-resume` with BACKGROUND for `resume_session_id`,
+  whose brief is submitted after 4 s idle). `<id>.spawned.json` is written
+  when the buffer has a session id, or `spawn-failed` after 180 s / buffer
+  death / start error. A `queue: true` spawn escapes `predates-arming` only
+  when the arming control request had `release_queued`. Retire: exactly one
+  live buffer, tags still covering `expect_tags`, same buffer name, no
+  protected tag (`decknix-agent-dispatch-retire-protected-tags`), no unsent
+  input even with `force`, waits for idle unless `force`, self-retire needs
+  `force`; then `decknix-session-lifecycle-quit` and `retired` only if the
+  buffer is really dead (else `unknown`).
 - **Reused seams.** Delivery goes through `decknix--compose-submit-after-wait`
   (live + process + not busy, then `shell-maker-submit`); session ids come from
   `decknix--agent-buffer-session-id`. Both are injectable variables so the
-  ERT suite replaces them and turns the real entry points into errors.
+  ERT suite replaces them and turns the real entry points into errors; the
+  same goes for spawn, resume, retire and live tags
+  (`decknix-agent-dispatch-{spawn,resume,retire,live-tags}-function`), whose
+  real targets (`decknix--agent-quickaction-start`,
+  `decknix--agent-session-resume`, `decknix-session-lifecycle-quit`,
+  `agent-shell--start`) error in the suite.
 - **Main-thread cost.** One 2 s timer (plus file-notify to scan sooner) that
   lists a tiny directory and parses at most 8 small JSON files; no subprocess,
   no network, and submit defers while `input-pending-p`.
 
 Lane state export (`agent-shell/session-export/`,
 `decknix-agent-session-export-mode`, on by default because it only writes):
-one JSON file per live session plus `_emacs.json` (heartbeat with pid and
-whether the receiver is armed) under `$XDG_STATE_HOME/decknix/sessions/`.
+one JSON file per live session plus `_emacs.json` (heartbeat with pid,
+whether the receiver is armed, `armed_at`, `armed_by`, whether the control
+watcher runs and `remote_control`; rewritten at once from
+`decknix-agent-dispatch-mode-hook` and the control mode's hook) under
+`$XDG_STATE_HOME/decknix/sessions/`.
 The notification observer stores a timestamp and edits a tool-call alist only
 for tool updates; a self-pacing sweep (5 s, or 20x its own duration) writes
 through `decknix-hub-cache-write-string`, so unchanged sessions cost no I/O,
@@ -1373,14 +1419,17 @@ entries that already list the session id. The CLI side is
 `cli/src/session_msg.rs` (`decknix session status | list --live | send |
 message | watch | inbox`) and `cli/src/session_lookup.rs` (the one target
 resolver behind `find`, `tags`, `status`, `send`, `resume`, `tag`, and the
-dispatch script's non-UUID `--session`).
+dispatch script's non-UUID `--session`), and `cli/src/session_lifecycle.rs`
+(`spawn`, `retire`, `dispatch status|on|off`; spec section 10).
 
 Receipt states: `accepted`, `rejected`, `expired`, `not-sent`, `unknown`
 (plus `cancelled`/`expired` written by the CLI). Inspect with
 `decknix-agent-dispatch status ID` (exit 0 accepted, 10 waiting, 11 not
 delivered, 12 unknown, 2 no such request).
 
-Tests: `tests/decknix-agent-dispatch-test.el` (ERT) and
+Tests: `tests/decknix-agent-dispatch-test.el`,
+`tests/decknix-agent-dispatch-control-test.el`,
+`tests/decknix-agent-session-resume-background-test.el` (ERT) and
 `scripts/decknix-agent-dispatch-test.sh` (CLI, run inside the Nix build of
 `decknix-agent-dispatch-cli`). Neither can reach a real session.
 
