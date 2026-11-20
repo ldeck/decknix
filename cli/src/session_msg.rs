@@ -337,7 +337,7 @@ pub fn cmd_list_live(tags: &[String], json_out: bool) -> Result<i32> {
     match &live.heartbeat {
         None => eprintln!("no Emacs heartbeat in {}: is the session export running?", dirs.sessions.display()),
         Some(h) if !live.fresh => eprintln!("Emacs heartbeat is stale (pid {}, {} ago): states below may be old", h.pid, ago(Some(now_secs() - h.at))),
-        Some(h) if !h.receiver => eprintln!("dispatch receiver is OFF: messages queue but are not delivered (M-x decknix-agent-dispatch-mode)"),
+        Some(h) if !h.receiver => eprintln!("dispatch receiver is OFF: messages are not delivered (see decknix session dispatch status)"),
         _ => {}
     }
     for v in live.sessions.iter().filter(|v| str_of(v, "state") != "dead") {
@@ -503,7 +503,8 @@ pub fn preflight(when: When, lane: Option<&Value>, receiver_on: bool, force: boo
     if !receiver_on && !force {
         return Preflight::NoReceiver(
             "the dispatch receiver is off or Emacs is not running: nothing would be delivered, and a request \
-             made before it is turned on is refused. Ask the human to run M-x decknix-agent-dispatch-mode"
+             made before it is turned on is refused. Check `decknix session dispatch status`, then ask the human \
+             before `decknix session dispatch on` (or M-x decknix-agent-dispatch-mode)"
                 .into(),
         );
     }
