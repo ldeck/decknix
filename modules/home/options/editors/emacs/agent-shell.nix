@@ -4229,6 +4229,10 @@ in
                     #'decknix-agent-session-export-observe-event)
         (unless decknix-agent-session-export-mode
           (decknix-agent-session-export-mode 1))
+        ;; A CLI that just armed or disarmed the receiver re-reads the
+        ;; heartbeat; without this it would wait up to 30 s to see the change.
+        (add-hook 'decknix-agent-dispatch-mode-hook
+                  #'decknix-agent-session-export-heartbeat-now)
         (require 'decknix-agent-format)
         (declare-function decknix--agent-session-time-ago "decknix-agent-format")
         (declare-function decknix--agent-session-time-compact "decknix-agent-format")

@@ -40,6 +40,24 @@
 ;; the running turn first, subject to `decknix-agent-dispatch-interrupt-policy'
 ;; and a rate limit.  Version 1 requests keep their original semantics.
 ;;
+;; Version 3 requests carry a `kind' and change which sessions exist rather
+;; than what one is told (`decknix session spawn' and `retire'):
+;;
+;;   spawn   start a lane in the background (or resume its saved session),
+;;           unless exactly one live session already carries every requested
+;;           tag, in which case nothing is started and that lane is reported.
+;;           `receipts/<id>.spawned.json' follows once the new session has an
+;;           id: {session_id, buffer, outcome new|resumed|existing}, or
+;;           {state spawn-failed, reason}.
+;;   retire  quit exactly one live session whose tags still match, once it
+;;           is idle (or at once with `force'), never one carrying a
+;;           protected tag or holding text the user has not sent.
+;;
+;; Both are governed by `decknix-agent-dispatch-lifecycle-policy'.  The
+;; third kind, `dispatch' (arm or disarm this receiver), never arrives
+;; here: it goes to control/ and is handled by the separately enabled
+;; `decknix-agent-dispatch-control' watcher.
+;;
 ;; The receiver fails closed on: an id that is not an exact lowercase UUID, no
 ;; or several live buffers holding the session, a buffer that changed between
 ;; claim and submit, a dead process, text the user has typed but not sent, a
@@ -79,6 +97,23 @@
                   (&optional buffer))
 (declare-function decknix-agent-session-export-background-p
                   "decknix-agent-session-export" (buf))
+(declare-function decknix--agent-tags-resolve "decknix-agent-tags-read" (conv-key session-id))
+(declare-function decknix--agent-current-conv-key "decknix-agent-buffer-lookup" ())
+(declare-function decknix--agent-find-new-shell-buffer "decknix-agent-buffer-lookup"
+                  (before-buffers))
+(declare-function decknix--agent-conv-key-for-session-id "decknix-agent-conv-resolve"
+                  (session-id))
+(declare-function decknix--agent-quickaction-start "decknix-agent-shell-main-link"
+                  (name tags workspace command &optional model provider-id mode
+                        background review-prs additional-roots))
+(declare-function decknix--agent-session-resume "decknix-agent-shell-main-session"
+                  (session-id history-count &optional display-name workspace
+                              conv-key search-term background))
+(declare-function decknix-agent-spawn-enqueue "decknix-agent-spawn-queue" (thunk))
+(declare-function decknix-agent-get-provider "decknix-agent-provider" (id))
+(declare-function decknix-session-lifecycle-quit "decknix-agent-session-lifecycle"
+                  (buffers &optional noconfirm))
+(defvar decknix-agent-session-history-count)
 
 (defvar decknix-agent-dispatch-dir
   (expand-file-name "decknix/agent-dispatch"
@@ -125,6 +160,54 @@ Also the window in which an interrupted session may not interrupt its
 interrupter back, so two sessions cannot cancel each other in a loop."
   :type 'integer
   :group 'decknix-agent-dispatch)
+
+(defcustom decknix-agent-dispatch-lifecycle-policy 'coordinator
+  "Who may spawn or retire sessions with a version 3 request.
+`never'       nobody.
+`coordinator' (default) senders tagged with one of
+              `decknix-agent-dispatch-coordinator-tags'.
+`always'      any sender, including a request with no sender."
+  :type '(choice (const never) (const coordinator) (const always))
+  :group 'decknix-agent-dispatch)
+
+(defcustom decknix-agent-dispatch-spawn-roots '("~/Code" "~/tools")
+  "Directories a spawned session's workspace must be in or below."
+  :type '(repeat directory)
+  :group 'decknix-agent-dispatch)
+
+(defcustom decknix-agent-dispatch-spawn-max-live 12
+  "Live sessions at or above which a spawn is refused (`too-many-sessions')."
+  :type 'integer
+  :group 'decknix-agent-dispatch)
+
+(defcustom decknix-agent-dispatch-spawn-min-interval 10
+  "Seconds after one spawn before another may start (`spawn-rate-limited')."
+  :type 'integer
+  :group 'decknix-agent-dispatch)
+
+(defcustom decknix-agent-dispatch-retire-protected-tags '("coordinator")
+  "Session tags that make a session impossible to retire by request."
+  :type '(repeat string)
+  :group 'decknix-agent-dispatch)
+
+(defvar decknix-agent-dispatch-max-ttl-v3 86400
+  "Longest lifetime in seconds a version 3 (spawn or retire) request may claim.")
+
+(defvar decknix-agent-dispatch-spawn-timeout 180
+  "Seconds a spawn may take to produce a session id before `spawn-failed'.")
+
+(defvar decknix-agent-dispatch-spawn-settle-seconds 4
+  "Seconds a resumed session must stay idle before its brief is submitted.
+A resume can auto-send a continuation primer when the session first
+reports ready; waiting out a short idle stretch keeps the brief from
+racing it.")
+
+(defvar decknix-agent-dispatch-arming-source nil
+  "Who is arming the receiver, bound around `decknix-agent-dispatch-mode'.
+nil means the human; the control watcher binds \"control:<sender>\".")
+
+(defvar decknix-agent-dispatch-arming-release-queued nil
+  "Non-nil, bound around arming, to release spawns queued before it.")
 
 (defvar decknix-agent-dispatch-interrupt-function
   (lambda (buf)
@@ -177,6 +260,29 @@ background task it started runs, which can be hours.")
   (lambda () (and (fboundp 'agent-shell-buffers) (agent-shell-buffers)))
   "Returns the agent-shell buffers to consider.")
 
+(defvar decknix-agent-dispatch-live-tags-function
+  (lambda (buf)
+    (when (fboundp 'decknix--agent-tags-resolve)
+      (with-current-buffer buf
+        (decknix--agent-tags-resolve
+         (and (fboundp 'decknix--agent-current-conv-key)
+              (decknix--agent-current-conv-key))
+         (ignore-errors (funcall decknix-agent-dispatch-session-id-function buf))))))
+  "Called with a live session buffer; returns its tags as the sidebar shows them.")
+
+(defvar decknix-agent-dispatch-spawn-function #'decknix-agent-dispatch--start-session
+  "Called with (SPEC CALLBACK) to start a new session without showing it.
+SPEC is a plist (:name :tags :workspace :brief :agent :model :mode).
+CALLBACK is called once with (BUFFER nil) or (nil REASON).")
+
+(defvar decknix-agent-dispatch-resume-function #'decknix-agent-dispatch--resume-session
+  "Called with (SPEC CALLBACK) to resume SPEC's :session_id in the background.
+Same SPEC and CALLBACK contract as `decknix-agent-dispatch-spawn-function'.")
+
+(defvar decknix-agent-dispatch-retire-function
+  (lambda (buf) (decknix-session-lifecycle-quit (list buf) t))
+  "Called with a session buffer to quit it and stop its broker.")
+
 (defvar decknix-agent-dispatch--active (make-hash-table :test 'equal)
   "Claimed requests awaiting an idle session: id -> (:req REQ :buffer BUF).")
 (defvar decknix-agent-dispatch--delivered (make-hash-table :test 'equal)
@@ -187,6 +293,14 @@ background task it started runs, which can be hours.")
   "Recent interrupts, newest first: (FROM TO AT).")
 (defvar decknix-agent-dispatch--armed-at nil
   "Epoch second the receiver was armed; earlier requests are refused.")
+(defvar decknix-agent-dispatch--armed-by nil
+  "\"human\", or \"control:<sender>\" when a control request armed it.")
+(defvar decknix-agent-dispatch--release-queued nil
+  "Non-nil when the arming control request asked to release queued spawns.")
+(defvar decknix-agent-dispatch--spawning (make-hash-table :test 'equal)
+  "Accepted spawns awaiting a session id: id -> plist.")
+(defvar decknix-agent-dispatch--last-spawn-at nil
+  "Epoch second of the last spawn or resume started, for the rate limit.")
 (defvar decknix-agent-dispatch--timer nil)
 (defvar decknix-agent-dispatch--watch nil)
 (defvar decknix-agent-dispatch--kick nil)
@@ -202,7 +316,7 @@ and the mtime check make a new request visible well before this.")
   "[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}")
 
 (defconst decknix-agent-dispatch--subdirs
-  '("pending" "inflight" "receipts" "tmp" "notices"))
+  '("pending" "inflight" "receipts" "tmp" "notices" "control"))
 
 (defconst decknix-agent-dispatch--modes '("idle" "now" "interrupt"))
 
@@ -247,39 +361,99 @@ and the mtime check make a new request visible well before this.")
   (when (eql (plist-get req :v) 2)
     (intern (or (plist-get req :when) "idle"))))
 
+(defun decknix-agent-dispatch--times-bad (req max-ttl now)
+  "Return why REQ's created/expiry times are unusable at NOW, else nil."
+  (let ((created (plist-get req :created_at))
+        (expires (plist-get req :expires_at)))
+    (cond
+     ((not (and (integerp created) (integerp expires))) "bad-times")
+     ((> created (+ now decknix-agent-dispatch-clock-skew)) "future-dated")
+     ((<= expires created) "bad-times")
+     ((> (- expires created) max-ttl) "ttl-too-long")
+     ((>= now expires) "expired"))))
+
+(defun decknix-agent-dispatch--text-bad (text hash)
+  "Return why TEXT (with claimed sha256 HASH) cannot be submitted, else nil."
+  (cond
+   ((not (stringp text)) "malformed")
+   ((string-empty-p (string-trim text)) "empty-prompt")
+   ((member (downcase (string-trim text)) decknix-agent-dispatch--reserved-prompts)
+    "reserved-prompt")
+   ((> (length (encode-coding-string text 'utf-8))
+       decknix-agent-dispatch-max-prompt-bytes)
+    "prompt-too-large")
+   ((not (equal hash (decknix-agent-dispatch--prompt-hash text))) "hash-mismatch")))
+
+(defun decknix-agent-dispatch--string-list (v &optional allow-empty)
+  "V (a JSON array) as a list of short non-blank strings, or `:bad'."
+  (if (and (vectorp v)
+           (or allow-empty (> (length v) 0))
+           (seq-every-p (lambda (s) (and (stringp s)
+                                         (not (string-empty-p (string-trim s)))
+                                         (<= (length s) 80)))
+                        v))
+      (append v nil)
+    :bad))
+
+(defun decknix-agent-dispatch--short-strings-bad (req keys)
+  (seq-some (lambda (k)
+              (let ((v (plist-get req k)))
+                (and v (not (and (stringp v) (<= (length v) 200))))))
+            keys))
+
+(defun decknix-agent-dispatch--v3-fields-bad (req)
+  "Return a reason when REQ's version 3 fields are malformed, else nil."
+  (let ((kind (plist-get req :kind))
+        (from (plist-get req :from))
+        (name (plist-get req :from_name))
+        (reason (plist-get req :reason))
+        (resume (plist-get req :resume_session_id)))
+    (cond
+     ((not (member kind '("spawn" "retire"))) "bad-kind")
+     ((not (decknix-agent-dispatch--uuid-p (plist-get req :id))) "bad-id")
+     ((and from (not (decknix-agent-dispatch--uuid-p from))) "bad-from")
+     ((and name (not (and (stringp name) (<= (length name) 80)))) "bad-from-name")
+     ((and reason (not (and (stringp reason)
+                            (<= (length reason) decknix-agent-dispatch-max-reason-chars))))
+      "bad-reason")
+     ((equal kind "spawn")
+      (let ((ws (plist-get req :workspace)))
+        (cond
+         ((eq :bad (decknix-agent-dispatch--string-list (plist-get req :tags))) "bad-tags")
+         ((not (and (stringp ws) (string-prefix-p "/" ws))) "bad-workspace")
+         ((decknix-agent-dispatch--text-bad (plist-get req :brief)
+                                            (plist-get req :brief_sha256)))
+         ((and resume (not (decknix-agent-dispatch--uuid-p resume))) "bad-resume-id")
+         ((decknix-agent-dispatch--short-strings-bad req '(:agent :name :model :mode))
+          "bad-field"))))
+     (t
+      (cond
+       ((not (decknix-agent-dispatch--uuid-p (plist-get req :session_id))) "bad-session-id")
+       ((eq :bad (decknix-agent-dispatch--string-list (plist-get req :expect_tags) t))
+        "bad-tags")
+       ((decknix-agent-dispatch--short-strings-bad req '(:expect_buffer)) "bad-field"))))))
+
 (defun decknix-agent-dispatch--validate (req now)
   "Return nil when REQ is deliverable at NOW, else a short reason string."
   (if (not (and (consp req) (plistp req)))
       "malformed"
-    (let* ((prompt (plist-get req :prompt))
-           (created (plist-get req :created_at))
-           (expires (plist-get req :expires_at))
-           (version (plist-get req :v))
-           (max-ttl (if (eql version 2)
-                        decknix-agent-dispatch-max-ttl-v2
-                      decknix-agent-dispatch-max-ttl)))
+    (let* ((version (plist-get req :v))
+           (max-ttl (pcase version
+                      (2 decknix-agent-dispatch-max-ttl-v2)
+                      (3 decknix-agent-dispatch-max-ttl-v3)
+                      (_ decknix-agent-dispatch-max-ttl))))
       (cond
-       ((not (memql version '(1 2))) "bad-version")
+       ((not (memql version '(1 2 3))) "bad-version")
+       ((eql version 3)
+        (or (decknix-agent-dispatch--v3-fields-bad req)
+            (decknix-agent-dispatch--times-bad req max-ttl now)))
        ((and (eql version 2) (decknix-agent-dispatch--v2-fields-bad req)))
        ((not (decknix-agent-dispatch--uuid-p (plist-get req :id))) "bad-id")
        ((not (decknix-agent-dispatch--uuid-p (plist-get req :session_id)))
         "bad-session-id")
-       ((not (stringp prompt)) "malformed")
-       ((string-empty-p (string-trim prompt)) "empty-prompt")
-       ((member (downcase (string-trim prompt))
-                decknix-agent-dispatch--reserved-prompts)
-        "reserved-prompt")
-       ((> (length (encode-coding-string prompt 'utf-8))
-           decknix-agent-dispatch-max-prompt-bytes)
-        "prompt-too-large")
-       ((not (equal (plist-get req :prompt_sha256)
-                    (decknix-agent-dispatch--prompt-hash prompt)))
-        "hash-mismatch")
-       ((not (and (integerp created) (integerp expires))) "bad-times")
-       ((> created (+ now decknix-agent-dispatch-clock-skew)) "future-dated")
-       ((<= expires created) "bad-times")
-       ((> (- expires created) max-ttl) "ttl-too-long")
-       ((>= now expires) "expired")))))
+       ((decknix-agent-dispatch--text-bad (plist-get req :prompt)
+                                          (plist-get req :prompt_sha256)))
+       ((decknix-agent-dispatch--times-bad req max-ttl now))))))
 
 (cl-defun decknix-agent-dispatch--decide (&key matches same proc unsent busy
                                                 mode interrupted)
@@ -310,15 +484,24 @@ outranks a coordinator."
 (defun decknix-agent-dispatch--short (id)
   (if (and (stringp id) (>= (length id) 8)) (substring id 0 8) (or id "?")))
 
+(defun decknix-agent-dispatch--sender (req)
+  "How REQ's sender is named in a transcript."
+  (or (plist-get req :from_name)
+      (and (plist-get req :from) (decknix-agent-dispatch--short (plist-get req :from)))
+      "an outside process"))
+
+(defun decknix-agent-dispatch--spawn-envelope (req)
+  "The line a spawned session's brief starts with, naming REQ and its sender."
+  (format "[decknix spawn %s from %s]"
+          (decknix-agent-dispatch--short (plist-get req :id))
+          (decknix-agent-dispatch--sender req)))
+
 (defun decknix-agent-dispatch--envelope (req &optional interrupted)
   "Return the line naming REQ's sender, or nil for version 1.
 It reaches the session's transcript, so the human reading it later sees
 who sent the message and, after an interrupt, why their turn was cut."
   (when (eql (plist-get req :v) 2)
-    (let ((sender (or (plist-get req :from_name)
-                      (and (plist-get req :from)
-                           (decknix-agent-dispatch--short (plist-get req :from)))
-                      "an outside process")))
+    (let ((sender (decknix-agent-dispatch--sender req)))
       (format "[decknix message %s from %s%s]"
               (decknix-agent-dispatch--short (plist-get req :id))
               sender
@@ -367,6 +550,52 @@ TAGS-OF maps a session id to its tags.  Pure apart from TAGS-OF."
               (seq-filter (lambda (e) (< (- now (nth 2 e))
                                          (* 2 decknix-agent-dispatch-interrupt-min-interval)))
                           decknix-agent-dispatch--interrupts))))
+
+;; -- lifecycle decisions (pure) --------------------------------------
+
+(defun decknix-agent-dispatch--tags-cover-p (have want)
+  "Non-nil when tag list HAVE holds every tag in WANT, ignoring case."
+  (seq-every-p (lambda (w)
+                 (seq-some (lambda (h) (and (stringp h)
+                                            (eq t (compare-strings w nil nil h nil nil t))))
+                           have))
+               want))
+
+(defun decknix-agent-dispatch--lifecycle-refusal (from tags-of)
+  "Return why sender FROM may not spawn or retire, or nil.
+TAGS-OF maps a session id to its tags."
+  (pcase decknix-agent-dispatch-lifecycle-policy
+    ('always nil)
+    ('coordinator
+     (unless (and from (seq-intersection (funcall tags-of from)
+                                         decknix-agent-dispatch-coordinator-tags))
+       "lifecycle-not-allowed"))
+    (_ "lifecycle-not-allowed")))
+
+(defun decknix-agent-dispatch--spawn-limit-refusal (live last-at now)
+  "Return why a spawn may not start with LIVE sessions, LAST-AT spawn, at NOW."
+  (cond
+   ((>= live decknix-agent-dispatch-spawn-max-live) "too-many-sessions")
+   ((and last-at (< (- now last-at) decknix-agent-dispatch-spawn-min-interval))
+    "spawn-rate-limited")))
+
+(cl-defun decknix-agent-dispatch--retire-decide (&key matches changed protected
+                                                       unsent busy force)
+  "Return `retire', `wait' or (refuse . REASON) for a retire request.
+MATCHES is how many live buffers hold the session; CHANGED whether its
+tags, buffer name or buffer no longer match what the request expected;
+PROTECTED whether it carries a protected tag; UNSENT whether the user has
+typed text there; BUSY whether a turn is open; FORCE whether the request
+asked not to wait.  Unsent text refuses even a forced retire: a human at
+the prompt outranks a coordinator."
+  (cond
+   ((eql matches 0) '(refuse . "no-session"))
+   ((> matches 1) '(refuse . "ambiguous-session"))
+   (changed '(refuse . "session-changed"))
+   (protected '(refuse . "protected-session"))
+   (unsent '(refuse . "unsent-input"))
+   ((and busy (not force)) 'wait)
+   (t 'retire)))
 
 ;; -- state directory ----------------------------------------------
 
@@ -574,7 +803,13 @@ Fails closed: an unreadable process mark counts as unsent input."
 (defun decknix-agent-dispatch--step (id)
   "Advance claimed request ID one decision; never blocks."
   (when-let ((entry (gethash id decknix-agent-dispatch--active)))
-    (let* ((req (plist-get entry :req))
+    (if (equal "retire" (plist-get (plist-get entry :req) :kind))
+        (decknix-agent-dispatch--step-retire id entry)
+      (decknix-agent-dispatch--step-prompt id entry))))
+
+(defun decknix-agent-dispatch--step-prompt (id entry)
+  "Advance prompt request ID (ENTRY in the active table) one decision."
+  (let* ((req (plist-get entry :req))
            (sid (plist-get req :session_id))
            (info (decknix-agent-dispatch--info req)))
       (if (>= (decknix-agent-dispatch--now) (plist-get req :expires_at))
@@ -604,7 +839,7 @@ Fails closed: an unreadable process mark counts as unsent input."
             (decknix-agent-dispatch--finish id sid "rejected" "submit-unavailable" info))
            ((input-pending-p) nil)
            (t (decknix-agent-dispatch--attempt
-               id req buf (decknix-agent-dispatch--delivery-text req interrupted)))))))))
+               id req buf (decknix-agent-dispatch--delivery-text req interrupted))))))))
 
 (defun decknix-agent-dispatch--interrupt (id entry buf)
   "Cancel BUF's turn for claimed request ID, or refuse it under the policy.
@@ -634,6 +869,278 @@ waits like an idle request until its own expiry rather than being lost."
                    (decknix-agent-dispatch--short from))
                (plist-get req :reason))
       (funcall decknix-agent-dispatch-interrupt-function buf))))
+
+;; -- retire ---------------------------------------------------------
+
+(defun decknix-agent-dispatch--live-tags (buf)
+  (ignore-errors (funcall decknix-agent-dispatch-live-tags-function buf)))
+
+(defun decknix-agent-dispatch--sender-tags (sid)
+  (and sid (ignore-errors (funcall decknix-agent-dispatch-tags-function sid))))
+
+(defun decknix-agent-dispatch--step-retire (id entry)
+  "Advance retire request ID (ENTRY in the active table) one decision."
+  (let* ((req (plist-get entry :req))
+         (sid (plist-get req :session_id))
+         (from (plist-get req :from))
+         (force (eq t (plist-get req :force)))
+         (info (list :kind "retire"))
+         (refusal (or (decknix-agent-dispatch--lifecycle-refusal
+                       from #'decknix-agent-dispatch--sender-tags)
+                      (and (equal from sid) (not force) "retire-self-needs-force"))))
+    (cond
+     (refusal (decknix-agent-dispatch--finish id sid "rejected" refusal info))
+     ((>= (decknix-agent-dispatch--now) (plist-get req :expires_at))
+      (decknix-agent-dispatch--finish id sid "expired" "expired-before-retire" info))
+     (t
+      (let* ((matches (decknix-agent-dispatch--matching-buffers sid))
+             (buf (and (= 1 (length matches)) (car matches)))
+             (claimed (plist-get entry :buffer))
+             (tags (and buf (decknix-agent-dispatch--live-tags buf)))
+             (want-buffer (plist-get req :expect_buffer))
+             (decision
+              (decknix-agent-dispatch--retire-decide
+               :matches (length matches)
+               :changed (and buf
+                             (or (and claimed (not (eq claimed buf)))
+                                 (not (decknix-agent-dispatch--tags-cover-p
+                                       tags (append (plist-get req :expect_tags) nil)))
+                                 (and want-buffer (not (equal want-buffer (buffer-name buf))))))
+               :protected (and buf
+                               (seq-some (lambda (p) (decknix-agent-dispatch--tags-cover-p
+                                                      tags (list p)))
+                                         decknix-agent-dispatch-retire-protected-tags))
+               :unsent (and buf (decknix-agent-dispatch--unsent-input-p buf))
+               :busy (and buf (decknix-agent-dispatch--busy-p buf))
+               :force force)))
+        (when (and buf (not claimed))
+          (puthash id (plist-put entry :buffer buf) decknix-agent-dispatch--active))
+        (pcase decision
+          ('wait nil)
+          (`(refuse . ,reason)
+           (decknix-agent-dispatch--finish id sid "rejected" reason info))
+          (_ (unless (input-pending-p)
+               (decknix-agent-dispatch--retire id sid buf info)))))))))
+
+(defun decknix-agent-dispatch--retire (id sid buf info)
+  "Quit BUF for retire request ID and record whether it is really gone."
+  (let ((name (buffer-name buf)))
+    (with-file-modes #o600
+      (write-region "1" nil (decknix-agent-dispatch--path "inflight" id ".attempt")
+                    nil 'silent))
+    (condition-case err
+        (progn
+          (funcall decknix-agent-dispatch-retire-function buf)
+          (if (buffer-live-p buf)
+              (decknix-agent-dispatch--finish id sid "unknown" "buffer-still-live"
+                                              (append info (list :buffer name)))
+            (decknix-agent-dispatch--finish
+             id sid "accepted" nil (append info (list :outcome "retired" :buffer name)))))
+      (error
+       (decknix-agent-dispatch--finish
+        id sid "unknown"
+        (truncate-string-to-width (concat "retire-error: " (error-message-string err)) 200)
+        (append info (list :buffer name)))))))
+
+;; -- spawn ----------------------------------------------------------
+
+(defun decknix-agent-dispatch--enqueue (thunk)
+  "Run THUNK through the spawn throttle when it is loaded, else now."
+  (if (fboundp 'decknix-agent-spawn-enqueue)
+      (decknix-agent-spawn-enqueue thunk)
+    (funcall thunk)))
+
+(defun decknix-agent-dispatch--start-session (spec callback)
+  "Default spawn: a background quick-action session for SPEC, throttled.
+The brief is the session's first message, which also keys its tags."
+  (decknix-agent-dispatch--enqueue
+   (lambda ()
+     (condition-case err
+         (let ((before (buffer-list))
+               (provider (and (plist-get spec :agent) (intern (plist-get spec :agent)))))
+           (when (and provider (fboundp 'decknix-agent-get-provider)
+                      (not (decknix-agent-get-provider provider)))
+             (error "unknown agent %s" provider))
+           (decknix--agent-quickaction-start
+            (plist-get spec :name) (plist-get spec :tags) (plist-get spec :workspace)
+            (plist-get spec :brief) (plist-get spec :model) provider
+            (plist-get spec :mode) t)
+           (funcall callback (decknix--agent-find-new-shell-buffer before) nil))
+       (error (funcall callback nil (error-message-string err)))))))
+
+(defun decknix-agent-dispatch--resume-session (spec callback)
+  "Default resume: reopen SPEC's :session_id in the background, throttled."
+  (decknix-agent-dispatch--enqueue
+   (lambda ()
+     (condition-case err
+         (let* ((sid (plist-get spec :session_id))
+                (conv-key (and (fboundp 'decknix--agent-conv-key-for-session-id)
+                               (ignore-errors (decknix--agent-conv-key-for-session-id sid))))
+                (buf (decknix--agent-session-resume
+                      sid (if (boundp 'decknix-agent-session-history-count)
+                              decknix-agent-session-history-count
+                            0)
+                      (plist-get spec :name) (plist-get spec :workspace)
+                      conv-key nil t)))
+           (funcall callback (and (bufferp buf) buf) nil))
+       (error (funcall callback nil (error-message-string err)))))))
+
+(defun decknix-agent-dispatch--workspace-refusal (ws)
+  (cond
+   ((not (seq-some (lambda (root) (file-in-directory-p ws (expand-file-name root)))
+                   decknix-agent-dispatch-spawn-roots))
+    "workspace-not-allowed")
+   ((not (file-directory-p ws)) "no-workspace")))
+
+(defun decknix-agent-dispatch--live-buffers ()
+  (seq-filter #'buffer-live-p (funcall decknix-agent-dispatch-buffers-function)))
+
+(defun decknix-agent-dispatch--write-spawned (id body)
+  "Write ID's spawned receipt with BODY and stop tracking it."
+  (remhash id decknix-agent-dispatch--spawning)
+  (decknix-agent-dispatch--write-json
+   "receipts" (concat id ".spawned.json")
+   (append (list :v 1 :id id :at (decknix-agent-dispatch--now)) body)))
+
+(defun decknix-agent-dispatch--spawn-failed (id reason)
+  (decknix-agent-dispatch--write-spawned
+   id (list :state "spawn-failed"
+            :reason (truncate-string-to-width (or reason "no-buffer") 200))))
+
+(defun decknix-agent-dispatch--spawn-started (id buf err)
+  "Callback of a spawn or resume seam for request ID."
+  (when (gethash id decknix-agent-dispatch--spawning)
+    (if (and (bufferp buf) (buffer-live-p buf) (not err))
+        (puthash id (plist-put (gethash id decknix-agent-dispatch--spawning) :buffer buf)
+                 decknix-agent-dispatch--spawning)
+      (decknix-agent-dispatch--spawn-failed id (or err "no-buffer")))))
+
+(defun decknix-agent-dispatch--spawn-in-progress-p (tags)
+  "Non-nil when an accepted spawn not yet confirmed asked for TAGS or more."
+  (let (hit)
+    (maphash (lambda (_ e)
+               (when (decknix-agent-dispatch--tags-cover-p (plist-get e :tags) tags)
+                 (setq hit t)))
+             decknix-agent-dispatch--spawning)
+    hit))
+
+(defun decknix-agent-dispatch--spawn (id req)
+  "Handle validated spawn request ID: report a lane, start one, or refuse."
+  (let* ((now (decknix-agent-dispatch--now))
+         (tags (append (plist-get req :tags) nil))
+         (ws (directory-file-name (expand-file-name (plist-get req :workspace))))
+         (resume (plist-get req :resume_session_id))
+         (info (list :kind "spawn"))
+         (refusal (or (decknix-agent-dispatch--lifecycle-refusal
+                       (plist-get req :from) #'decknix-agent-dispatch--sender-tags)
+                      (decknix-agent-dispatch--workspace-refusal ws)))
+         (live (and (not refusal) (decknix-agent-dispatch--live-buffers)))
+         (existing (and (not refusal)
+                        (or (and resume (decknix-agent-dispatch--matching-buffers resume))
+                            (seq-filter (lambda (b) (decknix-agent-dispatch--tags-cover-p
+                                                     (decknix-agent-dispatch--live-tags b)
+                                                     tags))
+                                        live)))))
+    (cond
+     (refusal (decknix-agent-dispatch--finish id nil "rejected" refusal info))
+     ((cdr existing) (decknix-agent-dispatch--finish id nil "rejected" "ambiguous-existing" info))
+     (existing (decknix-agent-dispatch--spawn-existing id req (car existing) info))
+     ((decknix-agent-dispatch--spawn-in-progress-p tags)
+      (decknix-agent-dispatch--finish id nil "rejected" "spawn-in-progress" info))
+     (t
+      (if-let ((limit (decknix-agent-dispatch--spawn-limit-refusal
+                       (+ (length live) (decknix-agent-dispatch--unstarted-count))
+                       decknix-agent-dispatch--last-spawn-at now)))
+          (decknix-agent-dispatch--finish id nil "rejected" limit info)
+        (decknix-agent-dispatch--launch id req tags ws resume now info))))))
+
+(defun decknix-agent-dispatch--unstarted-count ()
+  "Accepted spawns whose buffer does not exist yet, so the cap counts them."
+  (let ((n 0))
+    (maphash (lambda (_ e) (unless (plist-get e :buffer) (setq n (1+ n))))
+             decknix-agent-dispatch--spawning)
+    n))
+
+(defun decknix-agent-dispatch--spawn-existing (id req buf info)
+  "Report BUF as the lane spawn request ID asked for; start nothing."
+  (let ((sid (ignore-errors (funcall decknix-agent-dispatch-session-id-function buf))))
+    (decknix-agent-dispatch--finish
+     id sid "accepted" nil (append info (list :outcome "existing" :buffer (buffer-name buf))))
+    (if (and (stringp sid) (not (string-empty-p sid)))
+        (decknix-agent-dispatch--write-spawned
+         id (list :session_id sid :buffer (buffer-name buf) :outcome "existing"))
+      (puthash id (list :req req :outcome "existing" :buffer buf
+                        :at (decknix-agent-dispatch--now))
+               decknix-agent-dispatch--spawning))))
+
+(defun decknix-agent-dispatch--launch (id req tags ws resume now info)
+  "Start (or resume) the session spawn request ID asked for."
+  (let* ((outcome (if resume "resumed" "new"))
+         (text (concat (decknix-agent-dispatch--spawn-envelope req) "\n"
+                       (string-trim-right (plist-get req :brief))))
+         (spec (list :name (or (plist-get req :name) (string-join tags "/"))
+                     :tags tags :workspace ws :brief text
+                     :agent (plist-get req :agent) :model (plist-get req :model)
+                     :mode (plist-get req :mode) :session_id resume)))
+    (setq decknix-agent-dispatch--last-spawn-at now)
+    (puthash id (list :req req :outcome outcome :tags tags :brief text :at now)
+             decknix-agent-dispatch--spawning)
+    (decknix-agent-dispatch--finish id nil "accepted" nil
+                                    (append info (list :outcome outcome)))
+    (condition-case err
+        (funcall (if resume decknix-agent-dispatch-resume-function
+                   decknix-agent-dispatch-spawn-function)
+                 spec
+                 (lambda (buf reason) (decknix-agent-dispatch--spawn-started id buf reason)))
+      (error (decknix-agent-dispatch--spawn-failed id (error-message-string err))))))
+
+(defun decknix-agent-dispatch--deliver-brief (id entry buf now)
+  "Submit a resumed session's brief once BUF has been idle long enough."
+  (if (or (not (decknix-agent-dispatch--process-live-p buf))
+          (decknix-agent-dispatch--busy-p buf)
+          (decknix-agent-dispatch--unsent-input-p buf))
+      (puthash id (plist-put entry :idle-since nil) decknix-agent-dispatch--spawning)
+    (let ((since (or (plist-get entry :idle-since)
+                     (progn (puthash id (plist-put entry :idle-since now)
+                                     decknix-agent-dispatch--spawning)
+                            now))))
+      (when (and (>= (- now since) decknix-agent-dispatch-spawn-settle-seconds)
+                 (not (input-pending-p)))
+        (let ((ok (ignore-errors
+                    (funcall decknix-agent-dispatch-submit-function buf
+                             (plist-get entry :brief)))))
+          (decknix-agent-dispatch--write-spawned
+           id (list :session_id (funcall decknix-agent-dispatch-session-id-function buf)
+                    :buffer (buffer-name buf) :outcome "resumed"
+                    :brief (if ok "delivered" "not-delivered"))))))))
+
+(defun decknix-agent-dispatch--check-spawn (id)
+  "Advance tracked spawn ID: confirm its session id, or give up on it."
+  (when-let ((entry (gethash id decknix-agent-dispatch--spawning)))
+    (let* ((now (decknix-agent-dispatch--now))
+           (buf (plist-get entry :buffer))
+           (late (> (- now (plist-get entry :at)) decknix-agent-dispatch-spawn-timeout))
+           (sid (and (buffer-live-p buf)
+                     (ignore-errors (funcall decknix-agent-dispatch-session-id-function buf))))
+           (sid (and (stringp sid) (not (string-empty-p sid)) sid)))
+      (cond
+       ((and buf (not (buffer-live-p buf)))
+        (decknix-agent-dispatch--spawn-failed id "buffer-died"))
+       ((and (not sid) late) (decknix-agent-dispatch--spawn-failed id "timeout"))
+       ((not sid) nil)
+       ((not (equal "resumed" (plist-get entry :outcome)))
+        (decknix-agent-dispatch--write-spawned
+         id (list :session_id sid :buffer (buffer-name buf)
+                  :outcome (plist-get entry :outcome))))
+       ((> (- now (or (plist-get entry :sid-at)
+                      (progn (puthash id (plist-put entry :sid-at now)
+                                      decknix-agent-dispatch--spawning)
+                             now)))
+           decknix-agent-dispatch-spawn-timeout)
+        (decknix-agent-dispatch--write-spawned
+         id (list :session_id sid :buffer (buffer-name buf) :outcome "resumed"
+                  :brief "not-delivered")))
+       (t (decknix-agent-dispatch--deliver-brief id entry buf now))))))
 
 (defun decknix-agent-dispatch--answer-tail (buf)
   (let ((text (ignore-errors (funcall decknix-agent-dispatch-closing-text-function buf))))
@@ -694,6 +1201,7 @@ waits like an idle request until its own expiry rather than being lost."
                         (and decknix-agent-dispatch--armed-at
                              (< (plist-get req :created_at)
                                 decknix-agent-dispatch--armed-at)
+                             (not (decknix-agent-dispatch--released-p req))
                              "predates-arming"))))
           (when (and bad (consp req) (plistp req))
             (puthash id (list :req req) decknix-agent-dispatch--active))
@@ -705,7 +1213,16 @@ waits like an idle request until its own expiry rather than being lost."
             (decknix-agent-dispatch--finish id sid "rejected" bad))
            (t
             (puthash id (list :req req) decknix-agent-dispatch--active)
-            (decknix-agent-dispatch--step id)))))))))
+            (if (equal "spawn" (plist-get req :kind))
+                (decknix-agent-dispatch--spawn id req)
+              (decknix-agent-dispatch--step id))))))))))
+
+(defun decknix-agent-dispatch--released-p (req)
+  "Non-nil when REQ is a queued spawn the arming control request released."
+  (and decknix-agent-dispatch--release-queued
+       (eql 3 (plist-get req :v))
+       (equal "spawn" (plist-get req :kind))
+       (eq t (plist-get req :queue))))
 
 (defun decknix-agent-dispatch--pending-ids ()
   (mapcar (lambda (f) (string-remove-suffix ".json" f))
@@ -764,6 +1281,14 @@ what froze typing (102 hitches, worst 19 s) while nothing was pending."
           (dolist (id waiting)
             (decknix-agent-dispatch--guard
              id (lambda () (decknix-agent-dispatch--step id))))
+          (dolist (id (hash-table-keys decknix-agent-dispatch--spawning))
+            (condition-case err
+                (decknix-agent-dispatch--check-spawn id)
+              (error (decknix-agent-dispatch--write-spawned
+                      id (list :state "unknown"
+                               :reason (truncate-string-to-width
+                                        (concat "internal-error: " (error-message-string err))
+                                        200))))))
           (dolist (id (hash-table-keys decknix-agent-dispatch--delivered))
             (condition-case err
                 (decknix-agent-dispatch--check-answered id)
@@ -818,6 +1343,8 @@ what froze typing (102 hitches, worst 19 s) while nothing was pending."
   (decknix-agent-dispatch--ensure-dirs)
   (decknix-agent-dispatch--check-dirs)
   (setq decknix-agent-dispatch--armed-at (decknix-agent-dispatch--now)
+        decknix-agent-dispatch--armed-by (or decknix-agent-dispatch-arming-source "human")
+        decknix-agent-dispatch--release-queued decknix-agent-dispatch-arming-release-queued
         decknix-agent-dispatch--pending-seen nil)
   (decknix-agent-dispatch--recover)
   (setq decknix-agent-dispatch--timer
@@ -838,7 +1365,20 @@ what froze typing (102 hitches, worst 19 s) while nothing was pending."
         decknix-agent-dispatch--kick nil
         decknix-agent-dispatch--watch nil)
   (decknix-agent-dispatch--disarm-requests)
-  (setq decknix-agent-dispatch--armed-at nil))
+  (dolist (id (hash-table-keys decknix-agent-dispatch--spawning))
+    (decknix-agent-dispatch--write-spawned
+     id (list :state "unknown" :reason "disarmed-before-confirmation")))
+  (setq decknix-agent-dispatch--armed-at nil
+        decknix-agent-dispatch--armed-by nil
+        decknix-agent-dispatch--release-queued nil))
+
+(defun decknix-agent-dispatch-state ()
+  "Plist describing the receiver for the heartbeat; no I/O.
+Keys: :on, :armed_at, :armed_by and :release_queued."
+  (list :on (and (bound-and-true-p decknix-agent-dispatch-mode) t)
+        :armed_at decknix-agent-dispatch--armed-at
+        :armed_by decknix-agent-dispatch--armed-by
+        :release_queued decknix-agent-dispatch--release-queued))
 
 ;;;###autoload
 (define-minor-mode decknix-agent-dispatch-mode

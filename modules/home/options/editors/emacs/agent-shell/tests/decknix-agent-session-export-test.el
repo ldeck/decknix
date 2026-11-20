@@ -19,6 +19,8 @@
 
 (defvar shell-maker--busy nil)
 (defvar decknix-agent-dispatch-mode nil)
+(defvar decknix-agent-dispatch-control-mode nil)
+(defvar decknix-agent-dispatch-remote-control t)
 
 (defconst export-test--sid "11111111-2222-4333-8444-555555555555")
 
@@ -225,6 +227,45 @@ by the same tags even before its session id joins a store entry."
         (should (= 1000 (plist-get h :at)))
         (should (= (emacs-pid) (plist-get h :pid)))
         (should (eq :false (plist-get h :receiver)))))))
+
+(ert-deftest decknix-agent-session-export/heartbeat-reports-arming-and-control ()
+  (export-test-with-env
+    (let ((decknix-agent-dispatch-mode t)
+          (decknix-agent-dispatch-control-mode t)
+          (decknix-agent-dispatch-remote-control nil))
+      (cl-letf (((symbol-function 'decknix-agent-dispatch-state)
+                 (lambda () (list :on t :armed_at 990 :armed_by "control:abc"))))
+        (decknix-agent-session-export-sweep 1000.0))
+      (let ((h (export-test--read "_emacs.json")))
+        (should (eq t (plist-get h :receiver)))
+        (should (eq t (plist-get h :control)))
+        (should (eq :false (plist-get h :remote_control)))
+        (should (= 990 (plist-get h :armed_at)))
+        (should (equal "control:abc" (plist-get h :armed_by))))))
+  (export-test-with-env
+    (let ((decknix-agent-dispatch-mode nil)
+          (decknix-agent-dispatch-control-mode nil))
+      (decknix-agent-session-export-sweep 1000.0)
+      (let ((h (export-test--read "_emacs.json")))
+        (should (eq :false (plist-get h :control)))
+        (should (plist-member h :armed_at))
+        (should-not (plist-get h :armed_at))
+        (should-not (plist-get h :armed_by))))))
+
+(ert-deftest decknix-agent-session-export/heartbeat-now-writes-at-once ()
+  (export-test-with-env
+    (let ((decknix-agent-session-export-mode t)
+          (decknix-agent-dispatch-mode nil))
+      (decknix-agent-session-export-sweep 1000.0)
+      (setq export-test--writes nil
+            decknix-agent-dispatch-mode t)
+      (decknix-agent-session-export-heartbeat-now)
+      (should (equal '("_emacs.json") export-test--writes))
+      (should (eq t (plist-get (export-test--read "_emacs.json") :receiver))))
+    (let ((decknix-agent-session-export-mode nil))
+      (setq export-test--writes nil)
+      (decknix-agent-session-export-heartbeat-now)
+      (should-not export-test--writes))))
 
 (ert-deftest decknix-agent-session-export/killed-buffer-is-written-dead-once ()
   (export-test-with-env

@@ -79,10 +79,39 @@
           (decknix-agent-dispatch-session-id-function
            (lambda (buf) (alist-get buf dispatch-test--sids)))
           (decknix-agent-dispatch-buffers-function
-           (lambda () (mapcar #'car dispatch-test--sids))))
+           (lambda () (mapcar #'car dispatch-test--sids)))
+          (dispatch-test--buf-tags nil)
+          (dispatch-test--spawned nil)
+          (dispatch-test--resumed nil)
+          (dispatch-test--retired nil)
+          (dispatch-test--spawn-mode 'buffer)
+          (dispatch-test--retire-mode 'kill)
+          (decknix-agent-dispatch--spawning (make-hash-table :test 'equal))
+          (decknix-agent-dispatch--last-spawn-at nil)
+          (decknix-agent-dispatch--armed-by nil)
+          (decknix-agent-dispatch--release-queued nil)
+          (decknix-agent-dispatch-lifecycle-policy 'always)
+          (decknix-agent-dispatch-spawn-roots (list root))
+          (decknix-agent-dispatch-spawn-max-live 12)
+          (decknix-agent-dispatch-spawn-min-interval 10)
+          (decknix-agent-dispatch-retire-protected-tags '("coordinator"))
+          (decknix-agent-dispatch-live-tags-function
+           (lambda (buf) (alist-get buf dispatch-test--buf-tags)))
+          (decknix-agent-dispatch-spawn-function #'dispatch-test--stub-spawn)
+          (decknix-agent-dispatch-resume-function #'dispatch-test--stub-resume)
+          (decknix-agent-dispatch-retire-function #'dispatch-test--stub-retire))
+     (make-directory (expand-file-name "ws" root))
      (unwind-protect
          (cl-letf (((symbol-function 'decknix-agent-dispatch--now)
                     (lambda () dispatch-test--clock))
+                   ((symbol-function 'decknix--agent-quickaction-start)
+                    (lambda (&rest _) (error "REAL quickaction-start called")))
+                   ((symbol-function 'decknix--agent-session-resume)
+                    (lambda (&rest _) (error "REAL session resume called")))
+                   ((symbol-function 'decknix-session-lifecycle-quit)
+                    (lambda (&rest _) (error "REAL lifecycle quit called")))
+                   ((symbol-function 'agent-shell--start)
+                    (lambda (&rest _) (error "REAL agent-shell--start called")))
                    ((symbol-function 'shell-maker-submit)
                     (lambda (&rest _) (error "REAL shell-maker-submit called")))
                    ((symbol-function 'decknix--compose-submit-after-wait)
@@ -92,11 +121,43 @@
            (decknix-agent-dispatch--ensure-dirs)
            ,@body)
        (dolist (cell dispatch-test--sids)
-         (when-let ((p (get-buffer-process (car cell)))) (delete-process p))
-         (kill-buffer (car cell)))
+         (when (buffer-live-p (car cell))
+           (when-let ((p (get-buffer-process (car cell)))) (delete-process p))
+           (kill-buffer (car cell))))
        (delete-directory root t))))
 
 (defvar dispatch-test--clock 1000)
+(defvar dispatch-test--buf-tags nil "Alist BUFFER -> tags the live-tags seam returns.")
+(defvar dispatch-test--spawned nil "Specs the spawn stub received, newest first.")
+(defvar dispatch-test--resumed nil "Specs the resume stub received, newest first.")
+(defvar dispatch-test--retired nil "Buffers the retire stub received.")
+(defvar dispatch-test--spawn-mode 'buffer
+  "How the spawn/resume stubs behave: buffer, silent (never call back), fail.")
+(defvar dispatch-test--retire-mode 'kill "How the retire stub behaves: kill, keep.")
+
+(defun dispatch-test--stub-start (spec callback log)
+  (set log (cons spec (symbol-value log)))
+  (pcase dispatch-test--spawn-mode
+    ('buffer
+     (let ((buf (generate-new-buffer "spawned")))
+       (make-pipe-process :name "spawned" :buffer buf :noquery t)
+       (push (cons buf nil) dispatch-test--sids)
+       (push (cons buf (plist-get spec :tags)) dispatch-test--buf-tags)
+       (funcall callback buf nil)))
+    ('fail (funcall callback nil "boom"))
+    ('silent nil)))
+
+(defun dispatch-test--stub-spawn (spec callback)
+  (dispatch-test--stub-start spec callback 'dispatch-test--spawned))
+
+(defun dispatch-test--stub-resume (spec callback)
+  (dispatch-test--stub-start spec callback 'dispatch-test--resumed))
+
+(defun dispatch-test--stub-retire (buf)
+  (push buf dispatch-test--retired)
+  (when (eq dispatch-test--retire-mode 'kill)
+    (when-let ((p (get-buffer-process buf))) (delete-process p))
+    (kill-buffer buf)))
 (defvar dispatch-test--interrupted nil "Buffers the interrupt stub was called with.")
 (defvar dispatch-test--tags nil "Alist session id -> tags.")
 (defvar dispatch-test--quiet nil "Busy buffers that read as waiting on background work.")
@@ -164,7 +225,7 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
               (let ((r (copy-sequence (dispatch-test--req))))
                 (plist-put r key val)
                 (decknix-agent-dispatch--validate r now))))
-    (should (equal "bad-version" (bad :v 3 1000)))
+    (should (equal "bad-version" (bad :v 4 1000)))
     (should (equal "bad-id" (bad :id "nope" 1000)))
     (should (equal "bad-session-id" (bad :session_id "11111111" 1000)))
     (should (equal "bad-session-id" (bad :session_id (upcase dispatch-test--sid-2) 1000)))
@@ -852,6 +913,321 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
     (should (equal "do the thing" (cdar dispatch-test--sent)))
     (should-not (directory-files (dispatch-test--sub "notices") nil "\\`[^.]"))
     (should (= 0 (hash-table-count decknix-agent-dispatch--delivered)))))
+
+;; -- version 3: spawn and retire -----------------------------------
+
+(defconst dispatch-test--lane-tags ["us" "lane-07"])
+
+(defun dispatch-test--ws ()
+  (expand-file-name "ws" (file-name-directory (directory-file-name decknix-agent-dispatch-dir))))
+
+(defun dispatch-test--v3 (kind &rest args)
+  "Return a version 3 KIND request plist; ARGS override or add fields."
+  (let* ((brief (if (plist-member args :brief) (plist-get args :brief) "Pick up lane 07."))
+         (base (pcase kind
+                 ("spawn" (list :workspace (dispatch-test--ws)
+                                :tags dispatch-test--lane-tags
+                                :brief brief
+                                :brief_sha256 (and (stringp brief)
+                                                   (secure-hash
+                                                    'sha256 (encode-coding-string brief 'utf-8)))))
+                 ("retire" (list :session_id dispatch-test--sid
+                                 :expect_tags dispatch-test--lane-tags))
+                 (_ nil)))
+         (req (append (list :v 3 :id (or (plist-get args :id) dispatch-test--rid)
+                            :kind kind
+                            :created_at dispatch-test--clock
+                            :expires_at (+ dispatch-test--clock 3600))
+                      base)))
+    (cl-loop for (k v) on args by #'cddr
+             unless (eq k :brief)
+             do (setq req (plist-put req k v)))
+    req))
+
+(defun dispatch-test--drop3 (kind &rest args)
+  (let* ((req (apply #'dispatch-test--v3 kind args))
+         (path (expand-file-name (concat (plist-get req :id) ".json")
+                                 (dispatch-test--sub "pending"))))
+    (with-file-modes #o600
+      (with-temp-file path (insert (json-serialize req))))
+    path))
+
+(defun dispatch-test--spawned-receipt (&optional id)
+  (dispatch-test--json (expand-file-name (concat (or id dispatch-test--rid) ".spawned.json")
+                                         (dispatch-test--sub "receipts"))))
+
+(defun dispatch-test--lane (name sid tags)
+  (let ((buf (dispatch-test--make-session name sid)))
+    (push (cons buf tags) dispatch-test--buf-tags)
+    buf))
+
+(ert-deftest decknix-agent-dispatch/v3-validation-table ()
+  (dispatch-test-with-env
+    (cl-flet ((v (kind &rest args)
+                (decknix-agent-dispatch--validate (apply #'dispatch-test--v3 kind args)
+                                                  dispatch-test--clock)))
+      (should-not (v "spawn"))
+      (should-not (v "retire"))
+      (should-not (v "spawn" :resume_session_id dispatch-test--sid-2 :agent "claude"
+                     :model "opus" :mode "auto" :name "lane-07" :queue t))
+      (should (equal "bad-kind" (v "launch")))
+      (should (equal "bad-kind" (v "dispatch")))
+      (should (equal "bad-tags" (v "spawn" :tags [])))
+      (should (equal "bad-tags" (v "spawn" :tags [1])))
+      (should (equal "bad-tags" (v "spawn" :tags "us")))
+      (should (equal "bad-workspace" (v "spawn" :workspace "relative/dir")))
+      (should (equal "malformed" (v "spawn" :brief nil)))
+      (should (equal "hash-mismatch" (v "spawn" :brief_sha256 "00")))
+      (should (equal "bad-resume-id" (v "spawn" :resume_session_id "11111111")))
+      (should (equal "bad-field" (v "spawn" :agent 7)))
+      (should (equal "bad-session-id" (v "retire" :session_id "11111111")))
+      (should (equal "bad-tags" (v "retire" :expect_tags nil)))
+      (should (equal "bad-from" (v "retire" :from "nope")))
+      (should (equal "bad-reason" (v "retire" :reason (make-string 400 ?x))))
+      (should (equal "ttl-too-long" (v "spawn" :expires_at (+ dispatch-test--clock 90000))))
+      (should (equal "bad-id" (v "spawn" :id "nope"))))))
+
+(ert-deftest decknix-agent-dispatch/v3-dispatch-kind-in-pending-is-wrong-channel ()
+  (dispatch-test-with-env
+    (dispatch-test--drop3 "dispatch" :op "on")
+    (decknix-agent-dispatch--tick)
+    (should (equal "rejected" (plist-get (dispatch-test--receipt) :state)))
+    (should (equal "bad-kind" (plist-get (dispatch-test--receipt) :reason)))))
+
+(ert-deftest decknix-agent-dispatch/spawn-creates-in-background-with-an-envelope ()
+  (dispatch-test-with-env
+    (dispatch-test--drop3 "spawn" :from dispatch-test--coord :from_name "coord"
+                          :model "opus" :mode "auto" :name "lane-07")
+    (decknix-agent-dispatch--tick)
+    (should (= 1 (length dispatch-test--spawned)))
+    (let ((spec (car dispatch-test--spawned)))
+      (should (equal (dispatch-test--ws) (plist-get spec :workspace)))
+      (should (equal '("us" "lane-07") (plist-get spec :tags)))
+      (should (equal "lane-07" (plist-get spec :name)))
+      (should (equal "opus" (plist-get spec :model)))
+      (should (equal "auto" (plist-get spec :mode)))
+      (should (equal (format "[decknix spawn %s from coord]\nPick up lane 07."
+                             (substring dispatch-test--rid 0 8))
+                     (plist-get spec :brief))))
+    (let ((r (dispatch-test--receipt)))
+      (should (equal "accepted" (plist-get r :state)))
+      (should (equal "spawn" (plist-get r :kind)))
+      (should (equal "new" (plist-get r :outcome))))
+    (should-not (dispatch-test--spawned-receipt))
+    (should-not (dispatch-test--state-files "inflight"))
+    (let ((buf (caar dispatch-test--sids)))
+      (setf (alist-get buf dispatch-test--sids) dispatch-test--sid-2)
+      (decknix-agent-dispatch--tick)
+      (let ((s (dispatch-test--spawned-receipt)))
+        (should (equal dispatch-test--sid-2 (plist-get s :session_id)))
+        (should (equal (buffer-name buf) (plist-get s :buffer)))
+        (should (equal "new" (plist-get s :outcome)))))
+    (should (= 0 (hash-table-count decknix-agent-dispatch--spawning)))))
+
+(ert-deftest decknix-agent-dispatch/spawn-finds-the-existing-lane-and-sends-nothing ()
+  (dispatch-test-with-env
+    (let ((lane (dispatch-test--lane "lane" dispatch-test--sid '("us" "lane-07" "PLAT-1"))))
+      (dispatch-test--drop3 "spawn")
+      (decknix-agent-dispatch--tick)
+      (should-not dispatch-test--spawned)
+      (should-not dispatch-test--resumed)
+      (should-not dispatch-test--sent)
+      (should (equal "existing" (plist-get (dispatch-test--receipt) :outcome)))
+      (let ((s (dispatch-test--spawned-receipt)))
+        (should (equal dispatch-test--sid (plist-get s :session_id)))
+        (should (equal (buffer-name lane) (plist-get s :buffer)))
+        (should (equal "existing" (plist-get s :outcome)))))))
+
+(ert-deftest decknix-agent-dispatch/spawn-matching-two-lanes-is-ambiguous ()
+  (dispatch-test-with-env
+    (dispatch-test--lane "a" dispatch-test--sid '("us" "lane-07"))
+    (dispatch-test--lane "b" dispatch-test--sid-2 '("US" "Lane-07"))
+    (dispatch-test--drop3 "spawn")
+    (decknix-agent-dispatch--tick)
+    (should-not dispatch-test--spawned)
+    (should (equal "ambiguous-existing" (plist-get (dispatch-test--receipt) :reason)))))
+
+(ert-deftest decknix-agent-dispatch/spawn-refusals ()
+  (cl-flet ((refused (setup &rest args)
+              (dispatch-test-with-env
+                (funcall setup)
+                (apply #'dispatch-test--drop3 "spawn" args)
+                (decknix-agent-dispatch--tick)
+                (should-not dispatch-test--spawned)
+                (should (equal "rejected" (plist-get (dispatch-test--receipt) :state)))
+                (plist-get (dispatch-test--receipt) :reason))))
+    (should (equal "lifecycle-not-allowed"
+                   (refused (lambda () (setq decknix-agent-dispatch-lifecycle-policy 'never)))))
+    (should (equal "lifecycle-not-allowed"
+                   (refused (lambda () (setq decknix-agent-dispatch-lifecycle-policy 'coordinator))
+                            :from dispatch-test--coord)))
+    (should (equal "workspace-not-allowed"
+                   (refused #'ignore :workspace temporary-file-directory)))
+    (should (equal "no-workspace"
+                   (refused (lambda () (delete-directory (dispatch-test--ws))))))
+    (should (equal "too-many-sessions"
+                   (refused (lambda ()
+                              (setq decknix-agent-dispatch-spawn-max-live 1)
+                              (dispatch-test--lane "other" dispatch-test--sid-2 '("x"))))))
+    (should (equal "spawn-rate-limited"
+                   (refused (lambda () (setq decknix-agent-dispatch--last-spawn-at
+                                             (- dispatch-test--clock 5))))))))
+
+(ert-deftest decknix-agent-dispatch/spawn-coordinator-policy-allows-a-coordinator ()
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch-lifecycle-policy 'coordinator
+          dispatch-test--tags `((,dispatch-test--coord . ("coordinator"))))
+    (dispatch-test--drop3 "spawn" :from dispatch-test--coord)
+    (decknix-agent-dispatch--tick)
+    (should (= 1 (length dispatch-test--spawned)))))
+
+(ert-deftest decknix-agent-dispatch/spawn-times-out-or-dies-as-spawn-failed ()
+  (dispatch-test-with-env
+    (setq dispatch-test--spawn-mode 'silent)
+    (dispatch-test--drop3 "spawn")
+    (decknix-agent-dispatch--tick)
+    (should (equal "accepted" (plist-get (dispatch-test--receipt) :state)))
+    (setq dispatch-test--clock (+ dispatch-test--clock 181))
+    (decknix-agent-dispatch--tick)
+    (let ((s (dispatch-test--spawned-receipt)))
+      (should (equal "spawn-failed" (plist-get s :state)))
+      (should (equal "timeout" (plist-get s :reason)))))
+  (dispatch-test-with-env
+    (dispatch-test--drop3 "spawn")
+    (decknix-agent-dispatch--tick)
+    (let ((buf (caar dispatch-test--sids)))
+      (delete-process (get-buffer-process buf))
+      (kill-buffer buf))
+    (decknix-agent-dispatch--tick)
+    (should (equal "buffer-died" (plist-get (dispatch-test--spawned-receipt) :reason))))
+  (dispatch-test-with-env
+    (setq dispatch-test--spawn-mode 'fail)
+    (dispatch-test--drop3 "spawn")
+    (decknix-agent-dispatch--tick)
+    (should (equal "spawn-failed" (plist-get (dispatch-test--spawned-receipt) :state)))))
+
+(ert-deftest decknix-agent-dispatch/spawn-resumes-then-delivers-the-brief-once-settled ()
+  (dispatch-test-with-env
+    (dispatch-test--drop3 "spawn" :resume_session_id dispatch-test--sid-2)
+    (decknix-agent-dispatch--tick)
+    (should-not dispatch-test--spawned)
+    (should (equal dispatch-test--sid-2 (plist-get (car dispatch-test--resumed) :session_id)))
+    (should (equal "resumed" (plist-get (dispatch-test--receipt) :outcome)))
+    (let ((buf (caar dispatch-test--sids)))
+      (setf (alist-get buf dispatch-test--sids) dispatch-test--sid-2)
+      (decknix-agent-dispatch--tick)
+      (should-not dispatch-test--sent)
+      (setq dispatch-test--clock (+ dispatch-test--clock 5))
+      (decknix-agent-dispatch--tick)
+      (should (equal buf (caar dispatch-test--sent)))
+      (should (string-prefix-p "[decknix spawn " (cdar dispatch-test--sent)))
+      (let ((s (dispatch-test--spawned-receipt)))
+        (should (equal "resumed" (plist-get s :outcome)))
+        (should (equal dispatch-test--sid-2 (plist-get s :session_id)))))))
+
+(ert-deftest decknix-agent-dispatch/queued-spawn-needs-a-release-to-beat-arming ()
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch--armed-at 990)
+    (dispatch-test--drop3 "spawn" :created_at 980 :queue t)
+    (decknix-agent-dispatch--tick)
+    (should (equal "predates-arming" (plist-get (dispatch-test--receipt) :reason))))
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch--armed-at 990
+          decknix-agent-dispatch--release-queued t)
+    (dispatch-test--drop3 "spawn" :created_at 980 :queue t)
+    (decknix-agent-dispatch--tick)
+    (should (equal "accepted" (plist-get (dispatch-test--receipt) :state))))
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch--armed-at 990
+          decknix-agent-dispatch--release-queued t)
+    (dispatch-test--drop3 "spawn" :created_at 980)
+    (decknix-agent-dispatch--tick)
+    (should (equal "predates-arming" (plist-get (dispatch-test--receipt) :reason)))))
+
+(ert-deftest decknix-agent-dispatch/retire-quits-an-idle-lane-and-verifies ()
+  (dispatch-test-with-env
+    (let ((lane (dispatch-test--lane "lane" dispatch-test--sid '("us" "lane-07"))))
+      (dispatch-test--drop3 "retire" :expect_buffer "lane" :reason "done")
+      (decknix-agent-dispatch--tick)
+      (should (equal (list lane) dispatch-test--retired))
+      (let ((r (dispatch-test--receipt)))
+        (should (equal "accepted" (plist-get r :state)))
+        (should (equal "retire" (plist-get r :kind)))
+        (should (equal "retired" (plist-get r :outcome)))))))
+
+(ert-deftest decknix-agent-dispatch/retire-refusals ()
+  (cl-flet ((refused (setup &rest args)
+              (dispatch-test-with-env
+                (let ((lane (dispatch-test--lane "lane" dispatch-test--sid '("us" "lane-07"))))
+                  (funcall setup lane)
+                  (apply #'dispatch-test--drop3 "retire" args)
+                  (decknix-agent-dispatch--tick)
+                  (should-not dispatch-test--retired)
+                  (should (buffer-live-p lane))
+                  (plist-get (dispatch-test--receipt) :reason)))))
+    (should (equal "protected-session"
+                   (refused (lambda (l) (setf (alist-get l dispatch-test--buf-tags)
+                                              '("us" "lane-07" "coordinator"))))))
+    (should (equal "unsent-input"
+                   (refused (lambda (l) (dispatch-test--type l "half typed")) :force t)))
+    (should (equal "session-changed"
+                   (refused (lambda (l) (setf (alist-get l dispatch-test--buf-tags) '("us"))))))
+    (should (equal "session-changed" (refused #'ignore :expect_buffer "other")))
+    (should (equal "no-session" (refused #'ignore :session_id dispatch-test--sid-2)))
+    (should (equal "lifecycle-not-allowed"
+                   (refused (lambda (_) (setq decknix-agent-dispatch-lifecycle-policy 'never)))))
+    (should (equal "retire-self-needs-force"
+                   (refused #'ignore :from dispatch-test--sid)))))
+
+(ert-deftest decknix-agent-dispatch/retire-waits-for-idle-unless-forced ()
+  (dispatch-test-with-env
+    (let ((lane (dispatch-test--lane "lane" dispatch-test--sid '("us" "lane-07"))))
+      (with-current-buffer lane (setq-local shell-maker--busy t))
+      (dispatch-test--drop3 "retire")
+      (decknix-agent-dispatch--tick)
+      (should-not dispatch-test--retired)
+      (should-not (dispatch-test--receipt))
+      (with-current-buffer lane (setq-local shell-maker--busy nil))
+      (decknix-agent-dispatch--tick)
+      (should (equal "retired" (plist-get (dispatch-test--receipt) :outcome)))))
+  (dispatch-test-with-env
+    (let ((lane (dispatch-test--lane "lane" dispatch-test--sid '("us" "lane-07"))))
+      (with-current-buffer lane (setq-local shell-maker--busy t))
+      (dispatch-test--drop3 "retire" :force t)
+      (decknix-agent-dispatch--tick)
+      (should (equal (list lane) dispatch-test--retired))
+      (should (equal "retired" (plist-get (dispatch-test--receipt) :outcome))))))
+
+(ert-deftest decknix-agent-dispatch/retire-that-leaves-the-buffer-is-unknown ()
+  (dispatch-test-with-env
+    (setq dispatch-test--retire-mode 'keep)
+    (dispatch-test--lane "lane" dispatch-test--sid '("us" "lane-07"))
+    (dispatch-test--drop3 "retire")
+    (decknix-agent-dispatch--tick)
+    (should (equal "unknown" (plist-get (dispatch-test--receipt) :state)))))
+
+(ert-deftest decknix-agent-dispatch/state-records-who-armed-it ()
+  (let* ((root (make-temp-file "dispatch-mode" t))
+         (decknix-agent-dispatch-dir (expand-file-name "state" root))
+         (decknix-agent-dispatch--active (make-hash-table :test 'equal)))
+    (unwind-protect
+        (progn
+          (decknix-agent-dispatch-mode 1)
+          (should (equal "human" (plist-get (decknix-agent-dispatch-state) :armed_by)))
+          (should (plist-get (decknix-agent-dispatch-state) :on))
+          (should (integerp (plist-get (decknix-agent-dispatch-state) :armed_at)))
+          (decknix-agent-dispatch-mode -1)
+          (let ((decknix-agent-dispatch-arming-source (concat "control:" dispatch-test--coord))
+                (decknix-agent-dispatch-arming-release-queued t))
+            (decknix-agent-dispatch-mode 1))
+          (should (equal (concat "control:" dispatch-test--coord)
+                         (plist-get (decknix-agent-dispatch-state) :armed_by)))
+          (should decknix-agent-dispatch--release-queued)
+          (decknix-agent-dispatch-mode -1)
+          (should-not (plist-get (decknix-agent-dispatch-state) :on))
+          (should-not (plist-get (decknix-agent-dispatch-state) :armed_by)))
+      (decknix-agent-dispatch-mode -1)
+      (delete-directory root t))))
 
 (provide 'decknix-agent-dispatch-test)
 ;;; decknix-agent-dispatch-test.el ends here

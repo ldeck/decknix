@@ -13,7 +13,8 @@
 ;; Emacs anything:
 ;;
 ;;   $XDG_STATE_HOME/decknix/sessions/   (0700)
-;;     _emacs.json      heartbeat: pid, time, interval, dispatch receiver on?
+;;     _emacs.json      heartbeat: pid, time, interval, dispatch receiver on?,
+;;                      who armed it and when, control watcher on?
 ;;     <session>.json   state, busy since, last activity, current tool,
 ;;                      closing text tail, queue depth, last delivery,
 ;;                      tags as the sidebar resolves them
@@ -44,6 +45,8 @@
 (defvar shell-maker--busy)
 (defvar agent-shell--state)
 (defvar decknix-agent-dispatch-mode)
+(defvar decknix-agent-dispatch-control-mode)
+(defvar decknix-agent-dispatch-remote-control)
 (defvar decknix-agent-session-export-mode)
 (defvar decknix--agent-turn-message-tail)
 
@@ -56,6 +59,7 @@
 (declare-function decknix--compose-queue-count "decknix-agent-shell-main-compose" (target))
 (declare-function decknix-agent-dispatch-waiting-count "decknix-agent-dispatch" (sid))
 (declare-function decknix-agent-dispatch-last-delivered "decknix-agent-dispatch" (sid))
+(declare-function decknix-agent-dispatch-state "decknix-agent-dispatch" ())
 (declare-function decknix--agent-tags-resolve "decknix-agent-tags-read" (conv-key session-id))
 (declare-function decknix--agent-current-conv-key "decknix-agent-buffer-lookup" ())
 
@@ -357,12 +361,29 @@ lookup per sweep."
 
 (defun decknix-agent-session-export--heartbeat (now)
   (setq decknix-agent-session-export--heartbeat-at now)
-  (decknix-agent-session-export--write
-   "_emacs.json"
-   (list :v 1 :pid (emacs-pid) :at (floor now)
-         :interval decknix-agent-session-export-heartbeat-interval
-         :receiver (if (bound-and-true-p decknix-agent-dispatch-mode) t :false))
-   t))
+  (let ((state (and (fboundp 'decknix-agent-dispatch-state)
+                    (ignore-errors (decknix-agent-dispatch-state))))
+        (bool (lambda (v) (if v t :false))))
+    (decknix-agent-session-export--write
+     "_emacs.json"
+     (list :v 1 :pid (emacs-pid) :at (floor now)
+           :interval decknix-agent-session-export-heartbeat-interval
+           :receiver (funcall bool (bound-and-true-p decknix-agent-dispatch-mode))
+           :armed_at (or (plist-get state :armed_at) :null)
+           :armed_by (or (plist-get state :armed_by) :null)
+           :control (funcall bool (bound-and-true-p decknix-agent-dispatch-control-mode))
+           :remote_control (funcall bool (and (boundp 'decknix-agent-dispatch-remote-control)
+                                              decknix-agent-dispatch-remote-control)))
+     t)))
+
+(defun decknix-agent-session-export-heartbeat-now ()
+  "Rewrite the heartbeat at once, so a CLI waiting on a receiver change sees it.
+Run from `decknix-agent-dispatch-mode-hook'; does nothing while the export
+is off."
+  (when (bound-and-true-p decknix-agent-session-export-mode)
+    (ignore-errors
+      (decknix-agent-session-export--ensure-dir)
+      (decknix-agent-session-export--heartbeat (float-time)))))
 
 (defun decknix-agent-session-export-sweep (&optional now)
   "Write every live session's state file that changed, and the heartbeat."
