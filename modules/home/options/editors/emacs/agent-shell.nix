@@ -2895,6 +2895,19 @@ let
     ];
   };
 
+  # Control watcher for the dispatcher: `decknix session dispatch on|off'
+  # drops a request in agent-dispatch/control/ and this turns
+  # `decknix-agent-dispatch-mode' on or off, recording who armed it.  It
+  # never delivers anything itself; the arm call is a seam in the suite.
+  decknix-agent-dispatch-control-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-dispatch-control";
+    src = ./agent-shell/dispatch-control;
+    packageRequires = [ decknix-agent-dispatch-el ];
+    testFiles = [
+      "decknix-agent-dispatch-control-test.el"
+    ];
+  };
+
   # Lane state export for `decknix session status/list --live/send'.  One
   # change-only JSON file per live session plus a heartbeat under
   # $XDG_STATE_HOME/decknix/sessions/, so a coordinator agent can see what a
@@ -3340,6 +3353,22 @@ in
         crashes.  Off by default; sessions launch the bridge directly (exactly
         as before) until you opt in.  Requires the broker tooling on PATH
         (installed with the agent-shell module).
+      '';
+    };
+
+    dispatch.remoteControl.enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Run the dispatch control watcher, so `decknix session dispatch on`
+        and `off` can switch the agent dispatch receiver
+        (`decknix-agent-dispatch-mode`) without the human typing the
+        command. The receiver itself stays off until armed, by the human or
+        by such a request; the watcher delivers nothing, refuses requests
+        created before it started, and still honours `off` when the Emacs
+        variable `decknix-agent-dispatch-remote-control` forbids `on`.
+        Disable to make arming a manual `M-x decknix-agent-dispatch-mode`
+        only.
       '';
     };
 
@@ -3803,6 +3832,7 @@ in
         ++ (optional cfg.hub.enable decknix-agent-shell-hub-el)
         ++ [ decknix-picker-selections-el ]
         ++ [ decknix-agent-dispatch-el ]
+        ++ [ decknix-agent-dispatch-control-el ]
         ++ [ decknix-agent-session-export-el ]
         ++ [ decknix-agent-shell-main-el ]
         ++ (optional cfg.workspace.enable decknix-worktree-picker-el)
@@ -4233,6 +4263,24 @@ in
         ;; heartbeat; without this it would wait up to 30 s to see the change.
         (add-hook 'decknix-agent-dispatch-mode-hook
                   #'decknix-agent-session-export-heartbeat-now)
+        ;; Control watcher (`decknix session dispatch on|off').  The receiver
+        ;; itself stays inert until armed; this watcher is the one exception
+        ;; to that rule and runs by default, because it delivers nothing: it
+        ;; only lets an agent turn the receiver on (after asking the human,
+        ;; per the session-messaging skill) or off.  Requests created before
+        ;; it started are refused, so nothing queued while Emacs was down can
+        ;; arm the receiver.  Opt out with
+        ;; `programs.emacs.decknix.agentShell.dispatch.remoteControl.enable'.
+        (require 'decknix-agent-dispatch-control)
+        (add-hook 'decknix-agent-dispatch-control-mode-hook
+                  #'decknix-agent-session-export-heartbeat-now)
+        ${optionalString cfg.dispatch.remoteControl.enable ''
+        (unless decknix-agent-dispatch-control-mode
+          (condition-case err
+              (decknix-agent-dispatch-control-mode 1)
+            (error (message "decknix-agent-dispatch-control: not started: %s"
+                            (error-message-string err)))))
+        ''}
         (require 'decknix-agent-format)
         (declare-function decknix--agent-session-time-ago "decknix-agent-format")
         (declare-function decknix--agent-session-time-compact "decknix-agent-format")
