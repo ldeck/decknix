@@ -53,6 +53,7 @@
 
 ;; Forward declarations for upstream agent-shell + shell-maker + consult.
 (declare-function agent-shell-start "ext:agent-shell")
+(declare-function agent-shell--start "ext:agent-shell")
 (declare-function agent-shell-buffers "ext:agent-shell")
 (declare-function agent-shell-subscribe-to "ext:agent-shell")
 (declare-function agent-shell-unsubscribe "ext:agent-shell")
@@ -695,7 +696,7 @@ handler can pass the search term through to
 
 (defun decknix--agent-session-resume (session-id history-count
                                       &optional display-name workspace
-                                      conv-key search-term)
+                                      conv-key search-term background)
   "Resume SESSION-ID and pre-populate buffer with HISTORY-COUNT exchanges.
 DISPLAY-NAME, if provided, is used to rename the buffer to *Auggie: NAME*.
 WORKSPACE, if provided, sets --workspace-root and default-directory so the
@@ -706,6 +707,11 @@ SEARCH-TERM, if provided, is searched for case-insensitively in the
 loaded buffer after prepopulate; the window point is moved to the
 first match (and recentered).  Used by `decknix-agent-session-grep'
 to land on the matched message instead of the prompt.
+BACKGROUND, if non-nil, takes no window at all: a live conversation is
+returned without being shown, and a new buffer is started with
+`agent-shell--start :no-focus t' (`agent-shell-start' hardcodes
+`:no-focus nil').  Used by `decknix session spawn', which resumes from a
+timer while the user is working elsewhere.
 
 When CONV-KEY is non-nil and a live agent-shell buffer already holds
 that conversation, this function switches to that buffer in the
@@ -729,20 +735,23 @@ one is current."
                       ;; bridge processes writing one transcript.
                       (decknix--agent-find-live-buffer-for-session-id
                        session-id))))
-    (if existing
-        (let ((target-win (selected-window)))
-          (when (window-live-p target-win)
-            (set-window-buffer target-win existing))
-          (decknix--agent-session-jump-to-match existing search-term)
-          (message "Already live: switched to %s%s"
-                   (buffer-name existing)
-                   (if search-term
-                       (format " (search: %s)" search-term)
-                     ""))
-          existing)
+    (cond
+     ((and existing background) existing)
+     (existing
+      (let ((target-win (selected-window)))
+        (when (window-live-p target-win)
+          (set-window-buffer target-win existing))
+        (decknix--agent-session-jump-to-match existing search-term)
+        (message "Already live: switched to %s%s"
+                 (buffer-name existing)
+                 (if search-term
+                     (format " (search: %s)" search-term)
+                   ""))
+        existing))
+     (t
       (decknix--agent-session-resume--new
        session-id history-count display-name workspace conv-key
-       search-term))))
+       search-term background)))))
 
 (defun decknix--agent-session-jump-to-match (buf term)
   "Search BUF for TERM (case-insensitive); move window point on hit.
@@ -1023,7 +1032,7 @@ when CONV-KEY is nil, or the id is absent/blank at ready time."
 (defun decknix--agent-session-resume--new (session-id history-count
                                            &optional display-name
                                            workspace conv-key
-                                           search-term)
+                                           search-term background)
   "Internal: start a fresh agent-shell for SESSION-ID.
 See `decknix--agent-session-resume' for argument semantics.  This
 helper carries the original resume logic; the public entry point
@@ -1130,7 +1139,9 @@ dedupes against live buffers before calling here."
          ;; sessions are restored in quick succession.
          (shell-buf
           (let ((default-directory (or validated-ws default-directory)))
-            (agent-shell-start :config config))))
+            (if background
+                (agent-shell--start :config config :no-focus t :new-session t)
+              (agent-shell-start :config config)))))
     ;; Native ACP `session/resume' (#143 follow-up).  Providers whose
     ;; CLI resumes on the command line (auggie, `:resume-cli-flag') have
     ;; already restored context by the time the ACP session comes up; the

@@ -3023,6 +3023,7 @@ let
     testFiles = [
       "decknix-agent-review-bot-test.el"
       "decknix-agent-session-picker-test.el"
+      "decknix-agent-session-resume-background-test.el"
       "decknix-agent-compose-deliver-test.el"
       "decknix-agent-session-quit-test.el"
     ];
