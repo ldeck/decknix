@@ -311,21 +311,24 @@ Find, create, and resume Claude sessions (workspace + tag aware)
 Usage: decknix session <COMMAND>
 
 Commands:
-  list     List sessions in a workspace (default: current directory)
-  find     Find sessions by tag(s), buffer name, id or id prefix, or workspace; live first. Lists every match; on a miss, the closest sessions
-  status   Show what a live session is doing: state, busy time, last activity, current tool, closing text, queue
-  send     Send a message to a live session (delivered by the Emacs dispatch receiver)
-  message  Show a sent message's receipt chain (queued, delivered, answered, or why not)
-  watch    Block until messages are delivered or answered (run it in the background)
-  inbox    Notices about messages this session sent with --notify
-  archive  Archive matching sessions: compress + index, then remove the original
-  restore  Restore an archived session (decompress back to its original location)
-  gc       Apply the retention policy: archive stale sessions, trash very old archives
-  resume   Resume a session (exec into the agent by default)
-  new      Start a new session (exec into the agent by default)
-  tag      Add or remove tags on a session's conversation
-  link-pr  Link a GitHub PR to a session's conversation, as the sidebar's "linked PRs" (idempotent: an existing link of that PR is kept)
-  tags     List every tag with its session count, live count and sessions; spellings that differ only in case or separators are grouped
+  list      List sessions in a workspace (default: current directory)
+  find      Find sessions by tag(s), buffer name, id or id prefix, or workspace; live first. Lists every match; on a miss, the closest sessions
+  status    Show what a live session is doing: state, busy time, last activity, current tool, closing text, queue
+  send      Send a message to a live session (delivered by the Emacs dispatch receiver)
+  spawn     Start a lane in Emacs in the background, or report the live session already carrying these tags, or resume the saved one (idempotent)
+  retire    Quit one live lane once it is idle; its saved record stays, so a later spawn with the same tags resumes it
+  dispatch  Inspect or switch the Emacs dispatch receiver
+  message   Show a sent message's receipt chain (queued, delivered, answered, or why not)
+  watch     Block until messages are delivered or answered (run it in the background)
+  inbox     Notices about messages this session sent with --notify
+  archive   Archive matching sessions: compress + index, then remove the original
+  restore   Restore an archived session (decompress back to its original location)
+  gc        Apply the retention policy: archive stale sessions, trash very old archives
+  resume    Resume a session (exec into the agent by default)
+  new       Start a new session (exec into the agent by default)
+  tag       Add or remove tags on a session's conversation
+  link-pr   Link a GitHub PR to a session's conversation, as the sidebar's "linked PRs" (idempotent: an existing link of that PR is kept)
+  tags      List every tag with its session count, live count and sessions; spellings that differ only in case or separators are grouped
 
 Options:
   -h, --help
@@ -472,6 +475,169 @@ Options:
 
       --json
           Emit JSON
+
+  -h, --help
+          Print help
+```
+
+## `decknix session spawn`
+
+```text
+Start a lane in Emacs in the background, or report the live session already carrying these tags, or resume the saved one (idempotent)
+
+Usage: decknix session spawn [OPTIONS] --workspace <WORKSPACE> --tag <TAGS> [-- <BRIEF>...]
+
+Arguments:
+  [BRIEF]...
+          The brief (everything after `--`)
+
+Options:
+      --workspace <WORKSPACE>
+          Workspace directory the session starts in (must exist)
+
+      --tag <TAGS>
+          Tags the lane carries (comma-separated or repeated); all must match for an existing session to count as this lane
+
+      --agent <AGENT>
+          Which agent: claude, auggie, pi, ...
+
+          [default: claude]
+
+      --name <NAME>
+          Buffer name (default: the tags joined with `/`)
+
+      --model <MODEL>
+          Model the session starts on
+
+      --mode <MODE>
+          Permission/session mode (e.g. Claude `auto`)
+
+      --brief-file <BRIEF_FILE>
+          Read the brief (the first message) from a file
+
+      --stdin
+          Read the brief from stdin
+
+      --queue
+          Write the request even while the receiver is off; it runs after `decknix session dispatch on --release-queued`
+
+      --no-resume
+          Start a fresh session even when a saved one carries the tags
+
+      --wait <SECS>
+          Seconds to wait for the session id (0: print the request id and return)
+
+          [default: 180]
+
+      --ttl <TTL>
+          Request expiry (e.g. 30m, 1h, max 24h)
+
+          [default: 1h]
+
+      --from <FROM>
+          Sender session id (default: $DECKNIX_SESSION_ID or $CLAUDE_CODE_SESSION_ID)
+
+      --json
+          Emit JSON
+
+  -h, --help
+          Print help
+```
+
+## `decknix session retire`
+
+```text
+Quit one live lane once it is idle; its saved record stays, so a later spawn with the same tags resumes it
+
+Usage: decknix session retire [OPTIONS] <TARGET>
+
+Arguments:
+  <TARGET>
+          Full session id, buffer name, or the exact tags only it carries
+
+Options:
+      --reason <REASON>
+          Why; recorded with the request
+
+      --force
+          Do not wait for the turn to end (unsent typed input still refuses)
+
+      --wait <SECS>
+          Seconds to wait for the outcome
+
+          [default: 60]
+
+      --json
+          Emit JSON
+
+  -h, --help
+          Print help
+```
+
+## `decknix session dispatch`
+
+```text
+Inspect or switch the Emacs dispatch receiver
+
+Usage: decknix session dispatch <COMMAND>
+
+Commands:
+  status  Is the Emacs dispatch receiver on? Heartbeat age, who armed it, whether the control watcher runs, request counts (exit 0 on, 14 off, 15 no fresh heartbeat)
+  on      Turn the receiver on through the control watcher (ask the human first)
+  off     Turn the receiver off; waiting messages are settled `not-sent`
+
+Options:
+  -h, --help
+          Print help
+```
+
+## `decknix session dispatch status`
+
+```text
+Is the Emacs dispatch receiver on? Heartbeat age, who armed it, whether the control watcher runs, request counts (exit 0 on, 14 off, 15 no fresh heartbeat)
+
+Usage: decknix session dispatch status [OPTIONS]
+
+Options:
+      --json
+          Emit JSON
+
+  -h, --help
+          Print help
+```
+
+## `decknix session dispatch on`
+
+```text
+Turn the receiver on through the control watcher (ask the human first)
+
+Usage: decknix session dispatch on [OPTIONS]
+
+Options:
+      --release-queued
+          Also release spawns queued with `spawn --queue` before arming
+
+      --wait <SECS>
+          Seconds to wait for the watcher to apply it
+
+          [default: 15]
+
+  -h, --help
+          Print help
+```
+
+## `decknix session dispatch off`
+
+```text
+Turn the receiver off; waiting messages are settled `not-sent`
+
+Usage: decknix session dispatch off [OPTIONS]
+
+Options:
+      --wait <SECS>
+          Seconds to wait for the watcher to apply it
+
+          [default: 15]
 
   -h, --help
           Print help

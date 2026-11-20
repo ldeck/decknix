@@ -10,8 +10,10 @@
 //!     written by the same Emacs.
 //!   * Messages, read by `decknix-agent-dispatch.el` (the explicit-approval
 //!     dispatcher): `$XDG_STATE_HOME/decknix/agent-dispatch/` with `pending/`,
-//!     `inflight/`, `receipts/` and `notices/`. `send` writes a version 2
-//!     request; version 1 belongs to the `decknix-agent-dispatch` script.
+//!     `inflight/`, `receipts/`, `notices/` and `control/`. `send` writes a
+//!     version 2 request; version 1 belongs to the `decknix-agent-dispatch`
+//!     script; version 3 (spawn, retire, dispatch on|off) is written by
+//!     `session_lifecycle.rs`.
 //!
 //! See docs/specs/session-messaging/spec.md.
 
@@ -38,7 +40,7 @@ const MAX_REASON_CHARS: usize = 300;
 const MAX_TTL_SECS: i64 = 7 * 24 * 3600;
 const NOW_TTL_SECS: i64 = 60;
 const RESERVED_PROMPTS: [&str; 3] = ["help", "clear", "config"];
-const DISPATCH_SUBDIRS: [&str; 5] = ["pending", "inflight", "receipts", "tmp", "notices"];
+const DISPATCH_SUBDIRS: [&str; 6] = ["pending", "inflight", "receipts", "tmp", "notices", "control"];
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -66,7 +68,7 @@ impl Dirs {
     }
 }
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
@@ -75,11 +77,11 @@ pub fn strict_uuid(s: &str) -> bool {
     session::looks_like_uuid(s) && !s.bytes().any(|c| c.is_ascii_uppercase())
 }
 
-fn short(id: &str) -> &str {
+pub(crate) fn short(id: &str) -> &str {
     if id.len() >= 8 { &id[..8] } else { id }
 }
 
-fn read_json(path: &Path) -> Option<Value> {
+pub(crate) fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
@@ -100,21 +102,32 @@ pub fn parse_ttl(s: &str) -> Result<i64> {
 // Lane state
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Heartbeat {
     pub pid: i64,
     pub at: i64,
     pub interval: i64,
     pub receiver: bool,
+    /// The control watcher is running, so `session dispatch on|off` works.
+    pub control: bool,
+    pub armed_at: Option<i64>,
+    /// `human` or `control:<sender>`.
+    pub armed_by: Option<String>,
+    /// Whether a control request may turn the receiver on.
+    pub remote_control: Option<bool>,
 }
 
 impl Heartbeat {
-    fn from_value(v: &Value) -> Option<Self> {
+    pub(crate) fn from_value(v: &Value) -> Option<Self> {
         Some(Heartbeat {
             pid: v.get("pid")?.as_i64()?,
             at: v.get("at")?.as_i64()?,
             interval: v.get("interval").and_then(Value::as_i64).unwrap_or(30),
             receiver: v.get("receiver").and_then(Value::as_bool).unwrap_or(false),
+            control: v.get("control").and_then(Value::as_bool).unwrap_or(false),
+            armed_at: v.get("armed_at").and_then(Value::as_i64),
+            armed_by: v.get("armed_by").and_then(Value::as_str).map(str::to_string),
+            remote_control: v.get("remote_control").and_then(Value::as_bool),
         })
     }
 
@@ -124,7 +137,7 @@ impl Heartbeat {
     }
 }
 
-fn pid_alive(pid: i64) -> bool {
+pub(crate) fn pid_alive(pid: i64) -> bool {
     if pid <= 0 || pid > i32::MAX as i64 {
         return false;
     }
@@ -184,7 +197,7 @@ pub fn load_live(dirs: &Dirs, now: i64) -> Result<Live> {
     Ok(Live { heartbeat, fresh, sessions })
 }
 
-fn str_of<'a>(v: &'a Value, k: &str) -> &'a str {
+pub(crate) fn str_of<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(Value::as_str).unwrap_or("")
 }
 
@@ -199,7 +212,7 @@ fn usable(v: &Value) -> bool {
     !v.get("stale").and_then(Value::as_bool).unwrap_or(true) && str_of(v, "state") != "dead"
 }
 
-fn ago(secs: Option<i64>) -> String {
+pub(crate) fn ago(secs: Option<i64>) -> String {
     match secs {
         None => "-".into(),
         Some(s) if s < 90 => format!("{}s", s),
@@ -432,7 +445,7 @@ pub fn build_request(id: &str, spec: &SendSpec, now: i64) -> Result<Value> {
     Ok(req)
 }
 
-mod hex {
+pub(crate) mod hex {
     use sha2::{Digest, Sha256};
     pub fn sha256(b: &[u8]) -> String {
         Sha256::digest(b).iter().map(|x| format!("{:02x}", x)).collect()
@@ -461,12 +474,17 @@ pub fn ensure_dispatch_dirs(dispatch: &Path) -> Result<()> {
 
 /// Write REQ into pending/ atomically and without clobbering (hard link).
 pub fn publish_request(dispatch: &Path, req: &Value) -> Result<PathBuf> {
+    publish_to(dispatch, "pending", req)
+}
+
+/// Write REQ into SUB (pending/ or control/) atomically and without clobbering.
+pub fn publish_to(dispatch: &Path, sub: &str, req: &Value) -> Result<PathBuf> {
     ensure_dispatch_dirs(dispatch)?;
     let id = req["id"].as_str().ok_or_else(|| anyhow!("request has no id"))?;
     let tmp = dispatch.join("tmp").join(format!("request-{}.tmp", id));
     fs::write(&tmp, serde_json::to_vec(req)?)?;
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
-    let target = dispatch.join("pending").join(format!("{}.json", id));
+    let target = dispatch.join(sub).join(format!("{}.json", id));
     let linked = fs::hard_link(&tmp, &target);
     let _ = fs::remove_file(&tmp);
     linked.with_context(|| format!("publishing {}", target.display()))?;
@@ -500,7 +518,7 @@ pub fn preflight(when: When, lane: Option<&Value>, receiver_on: bool, force: boo
     }
 }
 
-fn default_from() -> Option<String> {
+pub(crate) fn default_from() -> Option<String> {
     ["DECKNIX_SESSION_ID", "CLAUDE_CODE_SESSION_ID"]
         .iter()
         .filter_map(|k| std::env::var(k).ok())
@@ -645,15 +663,35 @@ fn report_lane(lane: Option<&Value>, why: &str, json_out: bool) -> Result<()> {
 // Receipts
 // ---------------------------------------------------------------------------
 
-/// Merged view of one message's receipt chain.
+/// Merged view of one message's receipt chain. A spawn's accepted receipt
+/// reads `launching` until `<id>.spawned.json` says `spawned` (or why not);
+/// accepted retire and dispatch receipts read `retired` and `applied`.
 pub fn message_status(dispatch: &Path, id: &str, now: i64) -> Option<Value> {
     let receipt = read_json(&dispatch.join("receipts").join(format!("{}.json", id)));
     let answered = read_json(&dispatch.join("receipts").join(format!("{}.answered.json", id)));
+    let spawned = read_json(&dispatch.join("receipts").join(format!("{}.spawned.json", id)));
     if let Some(r) = receipt {
         let mut v = r.clone();
         let o = v.as_object_mut()?;
         let state = r.get("state").and_then(Value::as_str).unwrap_or("unknown");
-        o.insert("state".into(), json!(if state == "accepted" { "delivered" } else { state }));
+        let shown = match (state, r.get("kind").and_then(Value::as_str).unwrap_or("")) {
+            ("accepted", "spawn") => "launching",
+            ("accepted", "retire") => "retired",
+            ("accepted", "dispatch") => "applied",
+            ("accepted", _) => "delivered",
+            (s, _) => s,
+        };
+        o.insert("state".into(), json!(shown));
+        if let Some(sp) = spawned {
+            let st = sp.get("state").and_then(Value::as_str).unwrap_or("spawned");
+            o.insert("state".into(), json!(st));
+            for k in ["session_id", "buffer", "outcome", "brief", "reason"] {
+                if let Some(x) = sp.get(k) {
+                    o.insert(k.into(), x.clone());
+                }
+            }
+            o.insert("spawned_at".into(), sp.get("at").cloned().unwrap_or(Value::Null));
+        }
         if let Some(a) = answered {
             o.insert("state".into(), a.get("state").cloned().unwrap_or(json!("answered")));
             o.insert("answered_at".into(), a.get("at").cloned().unwrap_or(Value::Null));
@@ -692,8 +730,8 @@ pub fn message_status(dispatch: &Path, id: &str, now: i64) -> Option<Value> {
 
 pub fn exit_for(state: &str) -> i32 {
     match state {
-        "delivered" | "answered" => 0,
-        "queued" | "waiting" | "interrupting" => EXIT_PENDING,
+        "delivered" | "answered" | "spawned" | "retired" | "applied" => 0,
+        "queued" | "waiting" | "interrupting" | "launching" => EXIT_PENDING,
         "unknown" | "submitting" => EXIT_UNKNOWN,
         _ => EXIT_NOT_DELIVERED,
     }
@@ -753,7 +791,7 @@ impl Until {
 /// Has V reached UNTIL, or a state it can never leave?
 pub fn settled(v: &Value, until: Until) -> bool {
     match str_of(v, "state") {
-        "queued" | "waiting" | "interrupting" | "submitting" => false,
+        "queued" | "waiting" | "interrupting" | "submitting" | "launching" => false,
         "delivered" => until == Until::Delivered,
         _ => true,
     }
@@ -850,7 +888,7 @@ mod tests {
     const COORD: &str = "cccccccc-dddd-4eee-8fff-000000000000";
 
     fn hb(pid: i64, at: i64) -> Heartbeat {
-        Heartbeat { pid, at, interval: 30, receiver: true }
+        Heartbeat { pid, at, interval: 30, receiver: true, ..Default::default() }
     }
 
     fn lane(id: &str, buffer: &str, state: &str, tags: &[&str], stale: bool) -> Value {
@@ -1038,6 +1076,61 @@ mod tests {
         assert_eq!(v["turn_open"], json!(true));
         assert!(settled(&v, Until::Answered));
         assert_eq!(exit_for("answered"), 0);
+    }
+
+    #[test]
+    fn spawn_receipts_merge_the_spawned_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let id = "99999999-8888-4777-8666-555555555555";
+        write(&d.join("receipts").join(format!("{}.json", id)),
+              json!({"id": id, "state": "accepted", "kind": "spawn", "outcome": "new"}));
+        let v = message_status(d, id, 1000).unwrap();
+        assert_eq!(v["state"], json!("launching"));
+        assert_eq!(exit_for("launching"), EXIT_PENDING);
+        assert!(!settled(&v, Until::Delivered));
+        write(&d.join("receipts").join(format!("{}.spawned.json", id)),
+              json!({"id": id, "session_id": LANE, "buffer": "*Claude: us/lane-07*", "outcome": "new"}));
+        let v = message_status(d, id, 1000).unwrap();
+        assert_eq!(v["state"], json!("spawned"));
+        assert_eq!(v["session_id"], json!(LANE));
+        assert_eq!(v["buffer"], json!("*Claude: us/lane-07*"));
+        assert!(settled(&v, Until::Delivered));
+        assert_eq!(exit_for("spawned"), 0);
+        fs::write(d.join("receipts").join(format!("{}.spawned.json", id)),
+                  serde_json::to_vec(&json!({"id": id, "state": "spawn-failed", "reason": "timeout"})).unwrap()).unwrap();
+        let v = message_status(d, id, 1000).unwrap();
+        assert_eq!(v["state"], json!("spawn-failed"));
+        assert_eq!(v["reason"], json!("timeout"));
+        assert_eq!(exit_for("spawn-failed"), EXIT_NOT_DELIVERED);
+    }
+
+    #[test]
+    fn retire_and_control_receipts_name_their_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let id = "99999999-8888-4777-8666-555555555555";
+        write(&d.join("receipts").join(format!("{}.json", id)),
+              json!({"id": id, "state": "accepted", "kind": "retire", "outcome": "retired"}));
+        assert_eq!(message_status(d, id, 1000).unwrap()["state"], json!("retired"));
+        assert_eq!(exit_for("retired"), 0);
+        let id2 = "77777777-8888-4777-8666-555555555555";
+        write(&d.join("receipts").join(format!("{}.json", id2)),
+              json!({"id": id2, "state": "accepted", "kind": "dispatch", "outcome": "on"}));
+        assert_eq!(message_status(d, id2, 1000).unwrap()["state"], json!("applied"));
+        assert_eq!(exit_for("applied"), 0);
+    }
+
+    #[test]
+    fn heartbeat_reads_arming_and_control() {
+        let h = Heartbeat::from_value(&json!({"pid": 1, "at": 2, "receiver": true, "control": true,
+                                              "armed_at": 3, "armed_by": "control:x", "remote_control": false})).unwrap();
+        assert!(h.control);
+        assert_eq!(h.armed_at, Some(3));
+        assert_eq!(h.armed_by.as_deref(), Some("control:x"));
+        assert_eq!(h.remote_control, Some(false));
+        let old = Heartbeat::from_value(&json!({"pid": 1, "at": 2})).unwrap();
+        assert!(!old.control && old.armed_by.is_none());
     }
 
     #[test]

@@ -213,6 +213,13 @@ pub fn tags_match(filters: &[String], tags: &[String]) -> bool {
     filters.iter().flat_map(|f| terms(f)).all(|t| term_tier(&t, &keys).is_some())
 }
 
+/// The loosest tier at which every one of WANT (whole tags, not split
+/// further) matches one of TAGS, or None when one does not match at all.
+pub fn tags_tier(want: &[String], tags: &[String]) -> Option<Tier> {
+    let keys = split_tags(tags);
+    want.iter().map(|t| term_tier(t, &keys)).try_fold(Tier::Exact, |acc, t| t.map(|t| acc.max(t)))
+}
+
 fn looks_hex_id(s: &str) -> bool {
     s.len() >= MIN_PREFIX && s.bytes().all(|c| c.is_ascii_hexdigit() || c == b'-') && s.bytes().any(|c| c.is_ascii_hexdigit())
 }
@@ -231,7 +238,7 @@ fn expand_path(q: &str) -> Option<String> {
     Some(p.to_string_lossy().trim_end_matches('/').to_string())
 }
 
-fn canon_ws(w: &str) -> String {
+pub(crate) fn canon_ws(w: &str) -> String {
     let p = PathBuf::from(w);
     let p = p.canonicalize().unwrap_or(p);
     p.to_string_lossy().trim_end_matches('/').to_string()
@@ -588,7 +595,7 @@ pub fn load(dirs: &Dirs) -> Result<Loaded> {
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn self_id() -> Option<String> {
+pub(crate) fn self_id() -> Option<String> {
     std::env::var("DECKNIX_SESSION_ID").ok().or_else(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok()).filter(|s| !s.is_empty())
 }
 
@@ -613,7 +620,7 @@ fn tilde(p: &str) -> String {
     }
 }
 
-fn filled_workspace(c: &Cand) -> Option<String> {
+pub(crate) fn filled_workspace(c: &Cand) -> Option<String> {
     c.workspace.clone().or_else(|| {
         let p = c.transcript.as_ref()?;
         session::transcript_workspace(c.agent.as_deref()?, p)

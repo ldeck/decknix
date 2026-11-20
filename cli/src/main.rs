@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH, Duration};
 mod session;
 mod session_msg;
 mod session_lookup;
+mod session_lifecycle;
 mod session_archive;
 mod repo_sync;
 mod wt_finished;

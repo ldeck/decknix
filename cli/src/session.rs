@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::session_archive;
+use crate::session_lifecycle;
 use crate::session_lookup;
 use crate::session_msg;
 
@@ -157,6 +158,80 @@ pub enum SessionAction {
         /// Emit JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Start a lane in Emacs in the background, or report the live session
+    /// already carrying these tags, or resume the saved one (idempotent)
+    Spawn {
+        /// Workspace directory the session starts in (must exist)
+        #[arg(long)]
+        workspace: String,
+        /// Tags the lane carries (comma-separated or repeated); all must match
+        /// for an existing session to count as this lane
+        #[arg(long = "tag", required = true)]
+        tags: Vec<String>,
+        /// Which agent: claude, auggie, pi, ...
+        #[arg(long, default_value = "claude")]
+        agent: String,
+        /// Buffer name (default: the tags joined with `/`)
+        #[arg(long)]
+        name: Option<String>,
+        /// Model the session starts on
+        #[arg(long)]
+        model: Option<String>,
+        /// Permission/session mode (e.g. Claude `auto`)
+        #[arg(long)]
+        mode: Option<String>,
+        /// Read the brief (the first message) from a file
+        #[arg(long)]
+        brief_file: Option<String>,
+        /// Read the brief from stdin
+        #[arg(long)]
+        stdin: bool,
+        /// Write the request even while the receiver is off; it runs after
+        /// `decknix session dispatch on --release-queued`
+        #[arg(long)]
+        queue: bool,
+        /// Start a fresh session even when a saved one carries the tags
+        #[arg(long)]
+        no_resume: bool,
+        /// Seconds to wait for the session id (0: print the request id and return)
+        #[arg(long, default_value_t = 180, value_name = "SECS")]
+        wait: u64,
+        /// Request expiry (e.g. 30m, 1h, max 24h)
+        #[arg(long, default_value = "1h")]
+        ttl: String,
+        /// Sender session id (default: $DECKNIX_SESSION_ID or $CLAUDE_CODE_SESSION_ID)
+        #[arg(long)]
+        from: Option<String>,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+        /// The brief (everything after `--`)
+        #[arg(last = true)]
+        brief: Vec<String>,
+    },
+    /// Quit one live lane once it is idle; its saved record stays, so a later
+    /// spawn with the same tags resumes it
+    Retire {
+        /// Full session id, buffer name, or the exact tags only it carries
+        target: String,
+        /// Why; recorded with the request
+        #[arg(long)]
+        reason: Option<String>,
+        /// Do not wait for the turn to end (unsent typed input still refuses)
+        #[arg(long)]
+        force: bool,
+        /// Seconds to wait for the outcome
+        #[arg(long, default_value_t = 60, value_name = "SECS")]
+        wait: u64,
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect or switch the Emacs dispatch receiver
+    Dispatch {
+        #[command(subcommand)]
+        action: session_lifecycle::DispatchAction,
     },
     /// Show a sent message's receipt chain (queued, delivered, answered, or why not)
     Message {
@@ -336,6 +411,15 @@ pub fn run(action: SessionAction) -> Result<()> {
         SessionAction::Send { target, message, message_file, stdin, when, ttl, from, reason, notify, wait_receipt, force, json } => {
             exit_with(session_msg::cmd_send(&target, message, message_file, stdin, &when, ttl, from, reason, notify, wait_receipt, force, json))
         }
+        SessionAction::Spawn {
+            workspace, tags, agent, name, model, mode, brief_file, stdin, queue, no_resume, wait, ttl, from, json, brief,
+        } => exit_with(session_lifecycle::cmd_spawn(
+            &workspace, tags, agent, name, model, mode, brief_file, stdin, brief, queue, no_resume, wait, &ttl, from, json,
+        )),
+        SessionAction::Retire { target, reason, force, wait, json } => {
+            exit_with(session_lifecycle::cmd_retire(&target, reason, force, wait, json))
+        }
+        SessionAction::Dispatch { action } => exit_with(session_lifecycle::cmd_dispatch(action)),
         SessionAction::Message { id, json } => exit_with(session_msg::cmd_message(&id, json)),
         SessionAction::Watch { ids, until, timeout, json } => exit_with(session_msg::cmd_watch(ids, &until, &timeout, json)),
         SessionAction::Inbox { session, json, clear } => exit_with(session_msg::cmd_inbox(session, json, clear)),
