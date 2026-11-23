@@ -27,6 +27,7 @@
 (defconst dispatch-test--sid "11111111-2222-4333-8444-555555555555")
 (defconst dispatch-test--sid-2 "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
 (defconst dispatch-test--rid "99999999-8888-4777-8666-555555555555")
+(defconst dispatch-test--rid-2 "77777777-8888-4777-8666-555555555555")
 
 (defvar dispatch-test--sent nil "List of (BUFFER . INPUT) the stub received.")
 (defvar dispatch-test--sids nil "Alist BUFFER -> session id the resolver returns.")
@@ -88,6 +89,8 @@
           (dispatch-test--retire-mode 'kill)
           (decknix-agent-dispatch--spawning (make-hash-table :test 'equal))
           (decknix-agent-dispatch--last-spawn-at nil)
+          (decknix-agent-dispatch--lane-buffers nil)
+          (decknix-agent-dispatch-spawn-counted-tag-regexp "\\`lane-[0-9]+\\'")
           (decknix-agent-dispatch--armed-by nil)
           (decknix-agent-dispatch--release-queued nil)
           (decknix-agent-dispatch-lifecycle-policy 'always)
@@ -1068,7 +1071,7 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
     (should (equal "too-many-sessions"
                    (refused (lambda ()
                               (setq decknix-agent-dispatch-spawn-max-live 1)
-                              (dispatch-test--lane "other" dispatch-test--sid-2 '("x"))))))
+                              (dispatch-test--lane "other" dispatch-test--sid-2 '("lane-03"))))))
     (should (equal "spawn-rate-limited"
                    (refused (lambda () (setq decknix-agent-dispatch--last-spawn-at
                                              (- dispatch-test--clock 5))))))))
@@ -1117,6 +1120,54 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
     (decknix-agent-dispatch--tick)
     (should (equal "claude" (plist-get (car dispatch-test--spawned) :agent)))
     (should (equal "accepted" (plist-get (dispatch-test--receipt) :state)))))
+
+(ert-deftest decknix-agent-dispatch/spawn-cap-counts-only-lanes ()
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch-spawn-max-live 1)
+    (dispatch-test--lane "human" dispatch-test--sid '("PLAT-1"))
+    (dispatch-test--lane "review" dispatch-test--sid-2 '("review" "repo#12"))
+    (dispatch-test--make-session "untagged" "33333333-2222-4333-8444-555555555555")
+    (should (= 0 (decknix-agent-dispatch-counted-lanes)))
+    (dispatch-test--drop3 "spawn" :tags ["PLAT-2"])
+    (decknix-agent-dispatch--tick)
+    (should (equal "accepted" (plist-get (dispatch-test--receipt) :state)))
+    (should (= 1 (decknix-agent-dispatch-counted-lanes))))
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch-spawn-max-live 2)
+    (dispatch-test--lane "a" dispatch-test--sid '("us" "lane-01"))
+    (dispatch-test--lane "b" dispatch-test--sid-2 '("Lane-12"))
+    (dispatch-test--lane "c" "33333333-2222-4333-8444-555555555555" '("lane-1x" "xlane-2"))
+    (should (= 2 (decknix-agent-dispatch-counted-lanes)))
+    (dispatch-test--drop3 "spawn")
+    (decknix-agent-dispatch--tick)
+    (should (equal "too-many-sessions" (plist-get (dispatch-test--receipt) :reason)))))
+
+(ert-deftest decknix-agent-dispatch/spawned-sessions-count-without-a-lane-tag ()
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch-spawn-max-live 1)
+    (dispatch-test--drop3 "spawn" :tags ["PLAT-2"])
+    (decknix-agent-dispatch--tick)
+    (should (= 1 (length dispatch-test--spawned)))
+    (setf (alist-get (caar dispatch-test--sids) dispatch-test--sids) dispatch-test--sid-2)
+    (decknix-agent-dispatch--tick)
+    (should (dispatch-test--spawned-receipt))
+    (should (= 1 (decknix-agent-dispatch-counted-lanes)))
+    (setq dispatch-test--clock (+ dispatch-test--clock 60))
+    (dispatch-test--drop3 "spawn" :id dispatch-test--rid-2 :tags ["PLAT-3"])
+    (decknix-agent-dispatch--tick)
+    (should (= 1 (length dispatch-test--spawned)))
+    (should (equal "too-many-sessions"
+                   (plist-get (dispatch-test--receipt dispatch-test--rid-2) :reason)))
+    (let ((buf (caar dispatch-test--sids)))
+      (delete-process (get-buffer-process buf))
+      (kill-buffer buf))
+    (should (= 0 (decknix-agent-dispatch-counted-lanes)))))
+
+(ert-deftest decknix-agent-dispatch/counted-tag-regexp-nil-counts-only-spawned ()
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch-spawn-counted-tag-regexp nil)
+    (dispatch-test--lane "a" dispatch-test--sid '("lane-01"))
+    (should (= 0 (decknix-agent-dispatch-counted-lanes)))))
 
 (ert-deftest decknix-agent-dispatch/spawn-coordinator-policy-allows-a-coordinator ()
   (dispatch-test-with-env

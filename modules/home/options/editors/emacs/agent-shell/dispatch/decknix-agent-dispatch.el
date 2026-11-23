@@ -187,8 +187,18 @@ name before writing a request."
   :group 'decknix-agent-dispatch)
 
 (defcustom decknix-agent-dispatch-spawn-max-live 12
-  "Live sessions at or above which a spawn is refused (`too-many-sessions')."
+  "Counted lanes at or above which a spawn is refused (`too-many-sessions').
+See `decknix-agent-dispatch-counted-lanes' for what counts."
   :type 'integer
+  :group 'decknix-agent-dispatch)
+
+(defcustom decknix-agent-dispatch-spawn-counted-tag-regexp "\\`lane-[0-9]+\\'"
+  "A live session with a tag matching this (ignoring case) counts as a lane.
+Lanes count toward `decknix-agent-dispatch-spawn-max-live', as do sessions
+this receiver spawned whatever their tags.  Auto-review and human sessions
+carry no such tag, so they never use up the cap.  Nil counts only spawned
+sessions."
+  :type '(choice (const :tag "Spawned sessions only" nil) regexp)
   :group 'decknix-agent-dispatch)
 
 (defcustom decknix-agent-dispatch-spawn-min-interval 10
@@ -310,6 +320,8 @@ Same SPEC and CALLBACK contract as `decknix-agent-dispatch-spawn-function'.")
   "Non-nil when the arming control request asked to release queued spawns.")
 (defvar decknix-agent-dispatch--spawning (make-hash-table :test 'equal)
   "Accepted spawns awaiting a session id: id -> plist.")
+(defvar decknix-agent-dispatch--lane-buffers nil
+  "Buffers a spawn started or resumed; they count as lanes while live.")
 (defvar decknix-agent-dispatch--last-spawn-at nil
   "Epoch second of the last spawn or resume started, for the rate limit.")
 (defvar decknix-agent-dispatch--timer nil)
@@ -1036,8 +1048,10 @@ The brief is the session's first message, which also keys its tags."
   "Callback of a spawn or resume seam for request ID."
   (when (gethash id decknix-agent-dispatch--spawning)
     (if (and (bufferp buf) (buffer-live-p buf) (not err))
-        (puthash id (plist-put (gethash id decknix-agent-dispatch--spawning) :buffer buf)
-                 decknix-agent-dispatch--spawning)
+        (progn
+          (cl-pushnew buf decknix-agent-dispatch--lane-buffers)
+          (puthash id (plist-put (gethash id decknix-agent-dispatch--spawning) :buffer buf)
+                   decknix-agent-dispatch--spawning))
       (decknix-agent-dispatch--spawn-failed id (or err "no-buffer")))))
 
 (defun decknix-agent-dispatch--spawn-in-progress-p (tags)
@@ -1075,7 +1089,7 @@ The brief is the session's first message, which also keys its tags."
       (decknix-agent-dispatch--finish id nil "rejected" "spawn-in-progress" info))
      (t
       (if-let ((limit (decknix-agent-dispatch--spawn-limit-refusal
-                       (+ (length live) (decknix-agent-dispatch--unstarted-count))
+                       (decknix-agent-dispatch-counted-lanes live)
                        decknix-agent-dispatch--last-spawn-at now)))
           (decknix-agent-dispatch--finish id nil "rejected" limit info)
         (decknix-agent-dispatch--launch id req tags ws resume now info))))))
@@ -1086,6 +1100,26 @@ The brief is the session's first message, which also keys its tags."
     (maphash (lambda (_ e) (unless (plist-get e :buffer) (setq n (1+ n))))
              decknix-agent-dispatch--spawning)
     n))
+
+(defun decknix-agent-dispatch--counted-lane-p (buf)
+  (or (memq buf decknix-agent-dispatch--lane-buffers)
+      (and decknix-agent-dispatch-spawn-counted-tag-regexp
+           (let ((case-fold-search t))
+             (seq-some (lambda (tag)
+                         (and (stringp tag)
+                              (string-match-p decknix-agent-dispatch-spawn-counted-tag-regexp tag)))
+                       (decknix-agent-dispatch--live-tags buf))))))
+
+(defun decknix-agent-dispatch-counted-lanes (&optional live)
+  "Sessions the spawn cap counts: lanes among LIVE buffers, plus unstarted spawns.
+A lane is a session this receiver spawned or one carrying a tag matching
+`decknix-agent-dispatch-spawn-counted-tag-regexp'.  LIVE defaults to every
+live agent-shell buffer."
+  (setq decknix-agent-dispatch--lane-buffers
+        (seq-filter #'buffer-live-p decknix-agent-dispatch--lane-buffers))
+  (+ (seq-count #'decknix-agent-dispatch--counted-lane-p
+                (or live (decknix-agent-dispatch--live-buffers)))
+     (decknix-agent-dispatch--unstarted-count)))
 
 (defun decknix-agent-dispatch--spawn-existing (id req buf info)
   "Report BUF as the lane spawn request ID asked for; start nothing."
