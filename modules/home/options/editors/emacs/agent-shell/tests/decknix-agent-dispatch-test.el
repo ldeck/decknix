@@ -1073,6 +1073,51 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
                    (refused (lambda () (setq decknix-agent-dispatch--last-spawn-at
                                              (- dispatch-test--clock 5))))))))
 
+(ert-deftest decknix-agent-dispatch/spawn-agent-names-map-to-provider-ids ()
+  (should (eq 'claude-code (decknix-agent-dispatch--agent-provider "claude")))
+  (should (eq 'auggie (decknix-agent-dispatch--agent-provider "auggie")))
+  (should (eq 'pi (decknix-agent-dispatch--agent-provider "pi")))
+  (should-not (decknix-agent-dispatch--agent-provider nil))
+  (should (eq :unknown (decknix-agent-dispatch--agent-provider "claude-code")))
+  (should (eq :unknown (decknix-agent-dispatch--agent-provider "gpt"))))
+
+(ert-deftest decknix-agent-dispatch/default-spawn-starts-the-mapped-provider ()
+  (dolist (case '(("claude" . claude-code) ("auggie" . auggie) ("pi" . pi) (nil . nil)))
+    (dispatch-test-with-env
+      (let (started result)
+        (cl-letf (((symbol-function 'decknix-agent-get-provider)
+                   (lambda (id) (memq id '(claude-code auggie pi))))
+                  ((symbol-function 'decknix--agent-find-new-shell-buffer) (lambda (_) 'buf))
+                  ((symbol-function 'decknix--agent-quickaction-start)
+                   (lambda (&rest args) (setq started args))))
+          (decknix-agent-dispatch--start-session
+           (list :name "lane" :tags '("lane-01") :workspace "/w" :brief "go"
+                 :agent (car case))
+           (lambda (buf err) (setq result (list buf err)))))
+        (should (equal '(buf nil) result))
+        (should (eq (cdr case) (nth 5 started)))
+        (should (eq t (nth 7 started)))))))
+
+(ert-deftest decknix-agent-dispatch/spawn-with-an-unknown-agent-is-rejected-before-starting ()
+  (dispatch-test-with-env
+    (dispatch-test--drop3 "spawn" :agent "gpt")
+    (decknix-agent-dispatch--tick)
+    (should-not dispatch-test--spawned)
+    (should (equal "rejected" (plist-get (dispatch-test--receipt) :state)))
+    (should (equal "unknown-agent" (plist-get (dispatch-test--receipt) :reason)))
+    (should-not decknix-agent-dispatch--last-spawn-at))
+  (dispatch-test-with-env
+    (cl-letf (((symbol-function 'decknix-agent-get-provider) #'ignore))
+      (dispatch-test--drop3 "spawn" :agent "pi")
+      (decknix-agent-dispatch--tick))
+    (should-not dispatch-test--spawned)
+    (should (equal "unknown-agent" (plist-get (dispatch-test--receipt) :reason))))
+  (dispatch-test-with-env
+    (dispatch-test--drop3 "spawn" :agent "claude")
+    (decknix-agent-dispatch--tick)
+    (should (equal "claude" (plist-get (car dispatch-test--spawned) :agent)))
+    (should (equal "accepted" (plist-get (dispatch-test--receipt) :state)))))
+
 (ert-deftest decknix-agent-dispatch/spawn-coordinator-policy-allows-a-coordinator ()
   (dispatch-test-with-env
     (setq decknix-agent-dispatch-lifecycle-policy 'coordinator

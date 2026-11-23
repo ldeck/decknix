@@ -1366,7 +1366,11 @@ Rules the code and tests pin (do not weaken):
 - **Spawn and retire are version 3 and policed.** `kind: spawn` and
   `kind: retire` arrive in pending/ (`kind: dispatch` there is `bad-kind`),
   both under `decknix-agent-dispatch-lifecycle-policy` (default
-  `coordinator`). Spawn: workspace under `decknix-agent-dispatch-spawn-roots`
+  `coordinator`). Spawn: `agent` is a CLI/store name (`claude`, `auggie`,
+  `pi`) mapped to its provider id by `decknix-agent-dispatch-agent-providers`
+  (`claude` is `claude-code`; an unmapped or unregistered name is
+  `unknown-agent`, refused before anything starts); workspace under
+  `decknix-agent-dispatch-spawn-roots`
   and existing; one live buffer whose tags (via
   `decknix-agent-dispatch-live-tags-function`, the sidebar resolver) cover
   the request = outcome `existing`, no brief, nothing started; several =

@@ -175,6 +175,17 @@ interrupter back, so two sessions cannot cancel each other in a loop."
   :type '(repeat directory)
   :group 'decknix-agent-dispatch)
 
+(defcustom decknix-agent-dispatch-agent-providers
+  '(("claude" . claude-code) ("auggie" . auggie) ("pi" . pi))
+  "Agent names a spawn request may carry, and the provider id each starts.
+The names are the ones `decknix session' uses (its `--agent' values and
+the store's agent field); the ids are what
+`decknix-agent-register-provider' registered.  Keep it in step with
+`SPAWN_AGENTS' in cli/src/session_lifecycle.rs, which refuses any other
+name before writing a request."
+  :type '(alist :key-type string :value-type symbol)
+  :group 'decknix-agent-dispatch)
+
 (defcustom decknix-agent-dispatch-spawn-max-live 12
   "Live sessions at or above which a spawn is refused (`too-many-sessions')."
   :type 'integer
@@ -944,6 +955,21 @@ waits like an idle request until its own expiry rather than being lost."
 
 ;; -- spawn ----------------------------------------------------------
 
+(defun decknix-agent-dispatch--agent-provider (agent)
+  "Provider id spawn AGENT names, nil when it names none, else `:unknown'."
+  (cond
+   ((null agent) nil)
+   ((cdr (assoc agent decknix-agent-dispatch-agent-providers)))
+   (t :unknown)))
+
+(defun decknix-agent-dispatch--agent-refusal (agent)
+  "Return `unknown-agent' unless AGENT maps to a registered provider (or is nil)."
+  (let ((provider (decknix-agent-dispatch--agent-provider agent)))
+    (when (or (eq provider :unknown)
+              (and provider (fboundp 'decknix-agent-get-provider)
+                   (not (decknix-agent-get-provider provider))))
+      "unknown-agent")))
+
 (defun decknix-agent-dispatch--enqueue (thunk)
   "Run THUNK through the spawn throttle when it is loaded, else now."
   (if (fboundp 'decknix-agent-spawn-enqueue)
@@ -957,10 +983,9 @@ The brief is the session's first message, which also keys its tags."
    (lambda ()
      (condition-case err
          (let ((before (buffer-list))
-               (provider (and (plist-get spec :agent) (intern (plist-get spec :agent)))))
-           (when (and provider (fboundp 'decknix-agent-get-provider)
-                      (not (decknix-agent-get-provider provider)))
-             (error "unknown agent %s" provider))
+               (provider (decknix-agent-dispatch--agent-provider (plist-get spec :agent))))
+           (when (decknix-agent-dispatch--agent-refusal (plist-get spec :agent))
+             (error "unknown agent %s" (plist-get spec :agent)))
            (decknix--agent-quickaction-start
             (plist-get spec :name) (plist-get spec :tags) (plist-get spec :workspace)
             (plist-get spec :brief) (plist-get spec :model) provider
@@ -1033,6 +1058,7 @@ The brief is the session's first message, which also keys its tags."
          (info (list :kind "spawn"))
          (refusal (or (decknix-agent-dispatch--lifecycle-refusal
                        (plist-get req :from) #'decknix-agent-dispatch--sender-tags)
+                      (decknix-agent-dispatch--agent-refusal (plist-get req :agent))
                       (decknix-agent-dispatch--workspace-refusal ws)))
          (live (and (not refusal) (decknix-agent-dispatch--live-buffers)))
          (existing (and (not refusal)
