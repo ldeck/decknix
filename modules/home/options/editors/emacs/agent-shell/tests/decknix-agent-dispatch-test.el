@@ -1202,6 +1202,50 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
     (decknix-agent-dispatch--tick)
     (should (equal "spawn-failed" (plist-get (dispatch-test--spawned-receipt) :state)))))
 
+(ert-deftest decknix-agent-dispatch/a-started-spawn-holds-the-rate-limit-slot ()
+  (dispatch-test-with-env
+    (dispatch-test--drop3 "spawn")
+    (decknix-agent-dispatch--tick)
+    (should (= 1 (length dispatch-test--spawned)))
+    (setq dispatch-test--clock (+ dispatch-test--clock 5))
+    (dispatch-test--drop3 "spawn" :id dispatch-test--rid-2 :tags ["lane-08"])
+    (decknix-agent-dispatch--tick)
+    (should (= 1 (length dispatch-test--spawned)))
+    (should (equal "spawn-rate-limited"
+                   (plist-get (dispatch-test--receipt dispatch-test--rid-2) :reason)))))
+
+(ert-deftest decknix-agent-dispatch/a-failed-spawn-frees-the-rate-limit-slot ()
+  (dispatch-test-with-env
+    (setq dispatch-test--spawn-mode 'fail)
+    (dispatch-test--drop3 "spawn")
+    (decknix-agent-dispatch--tick)
+    (should (equal "spawn-failed" (plist-get (dispatch-test--spawned-receipt) :state)))
+    (should-not decknix-agent-dispatch--last-spawn-at)
+    (setq dispatch-test--spawn-mode 'buffer)
+    (dispatch-test--drop3 "spawn" :id dispatch-test--rid-2 :tags ["lane-08"])
+    (decknix-agent-dispatch--tick)
+    (should (equal "accepted" (plist-get (dispatch-test--receipt dispatch-test--rid-2) :state)))
+    (should (= 2 (length dispatch-test--spawned))))
+  (dispatch-test-with-env
+    (let (callback)
+      (setq decknix-agent-dispatch--last-spawn-at 700
+            decknix-agent-dispatch-spawn-function
+            (lambda (_spec cb) (setq callback cb)))
+      (dispatch-test--drop3 "spawn")
+      (decknix-agent-dispatch--tick)
+      (should (eql dispatch-test--clock decknix-agent-dispatch--last-spawn-at))
+      (setq dispatch-test--clock (+ dispatch-test--clock 2))
+      (funcall callback nil "unknown agent claude")
+      (should (equal "spawn-failed" (plist-get (dispatch-test--spawned-receipt) :state)))
+      (should (eql 700 decknix-agent-dispatch--last-spawn-at))))
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch-spawn-function
+          (lambda (_spec _cb) (error "start blew up")))
+    (dispatch-test--drop3 "spawn")
+    (decknix-agent-dispatch--tick)
+    (should (equal "spawn-failed" (plist-get (dispatch-test--spawned-receipt) :state)))
+    (should-not decknix-agent-dispatch--last-spawn-at)))
+
 (ert-deftest decknix-agent-dispatch/spawn-resumes-then-delivers-the-brief-once-settled ()
   (dispatch-test-with-env
     (dispatch-test--drop3 "spawn" :resume_session_id dispatch-test--sid-2)

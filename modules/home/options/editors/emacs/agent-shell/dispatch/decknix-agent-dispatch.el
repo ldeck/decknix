@@ -1040,6 +1040,13 @@ The brief is the session's first message, which also keys its tags."
    (append (list :v 1 :id id :at (decknix-agent-dispatch--now)) body)))
 
 (defun decknix-agent-dispatch--spawn-failed (id reason)
+  "Settle spawn ID as failed for REASON, giving back its rate-limit slot.
+Only a spawn that started a session should hold off the next one, so the
+interval restarts from the spawn before, unless a later one has started."
+  (let ((entry (gethash id decknix-agent-dispatch--spawning)))
+    (when (and (plist-member entry :prev-spawn-at)
+               (eql decknix-agent-dispatch--last-spawn-at (plist-get entry :at)))
+      (setq decknix-agent-dispatch--last-spawn-at (plist-get entry :prev-spawn-at))))
   (decknix-agent-dispatch--write-spawned
    id (list :state "spawn-failed"
             :reason (truncate-string-to-width (or reason "no-buffer") 200))))
@@ -1142,9 +1149,10 @@ live agent-shell buffer."
                      :tags tags :workspace ws :brief text
                      :agent (plist-get req :agent) :model (plist-get req :model)
                      :mode (plist-get req :mode) :session_id resume)))
-    (setq decknix-agent-dispatch--last-spawn-at now)
-    (puthash id (list :req req :outcome outcome :tags tags :brief text :at now)
+    (puthash id (list :req req :outcome outcome :tags tags :brief text :at now
+                      :prev-spawn-at decknix-agent-dispatch--last-spawn-at)
              decknix-agent-dispatch--spawning)
+    (setq decknix-agent-dispatch--last-spawn-at now)
     (decknix-agent-dispatch--finish id nil "accepted" nil
                                     (append info (list :outcome outcome)))
     (condition-case err
