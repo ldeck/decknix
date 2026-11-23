@@ -1418,7 +1418,8 @@ Lane state export (`agent-shell/session-export/`,
 `decknix-agent-session-export-mode`, on by default because it only writes):
 one JSON file per live session plus `_emacs.json` (heartbeat with pid,
 whether the receiver is armed, `armed_at`, `armed_by`, whether the control
-watcher runs and `remote_control`; rewritten at once from
+watcher runs, `remote_control`, and `lanes_live`/`spawn_max_live` from
+`decknix-agent-dispatch-lane-usage` for `dispatch status`; rewritten at once from
 `decknix-agent-dispatch-mode-hook` and the control mode's hook) under
 `$XDG_STATE_HOME/decknix/sessions/`.
 The notification observer stores a timestamp and edits a tool-call alist only

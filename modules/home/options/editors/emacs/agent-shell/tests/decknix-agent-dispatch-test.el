@@ -1208,6 +1208,13 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
       (kill-buffer buf))
     (should (= 0 (decknix-agent-dispatch-counted-lanes)))))
 
+(ert-deftest decknix-agent-dispatch/lane-usage-reports-counted-lanes-and-the-cap ()
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch-spawn-max-live 5)
+    (dispatch-test--lane "a" dispatch-test--sid '("us" "lane-01"))
+    (dispatch-test--lane "review" dispatch-test--sid-2 '("review"))
+    (should (equal '(:lanes_live 1 :spawn_max_live 5) (decknix-agent-dispatch-lane-usage)))))
+
 (ert-deftest decknix-agent-dispatch/counted-tag-regexp-nil-counts-only-spawned ()
   (dispatch-test-with-env
     (setq decknix-agent-dispatch-spawn-counted-tag-regexp nil)

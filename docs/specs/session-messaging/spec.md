@@ -31,7 +31,8 @@ Emacs writes one JSON file per live agent-shell session plus a heartbeat (module
 $XDG_STATE_HOME/decknix/sessions/        (default ~/.local/state, dir 0700, files 0600)
   _emacs.json     {"v":1,"pid":…,"at":<epoch>,"interval":30,"receiver":true|false,
                    "armed_at":<epoch>|null,"armed_by":"startup"|"human"|"control:<id>"|null,
-                   "control":true|false,"remote_control":true|false}
+                   "control":true|false,"remote_control":true|false,
+                   "lanes_live":<n>|null,"spawn_max_live":<cap>|null}
   <session>.json  one per live session
 ```
 
@@ -183,6 +184,6 @@ The receiver refuses: policy (`lifecycle-not-allowed`); a self-retire without fo
 
 `decknix-agent-dispatch-control-mode` (package `agent-shell/dispatch-control/`) checks control/ every 5 s (one directory stat when nothing changed) plus file-notify, claims a request by renaming it to `<id>.claimed`, applies the receiver's file checks (UUID name, 0600, owner, no symlink, size), and writes `receipts/<id>.json` with `kind: dispatch`. `op on` arms the receiver with `armed_by: control:<from>` (refused `remote-control-disabled` while `decknix-agent-dispatch-remote-control` is nil); `op off` disarms it, always. Requests created before the watcher started are refused (`predates-control`). The heartbeat is rewritten as soon as the receiver or the watcher toggles.
 
-`decknix session dispatch status` exits 0 when the receiver is on, 14 when off, 15 with no fresh heartbeat, and shows who armed it, whether the watcher runs, and request counts. `on` and `off` are no-ops (exit 0) when already in that state, exit 16 when the heartbeat shows no control watcher (only `M-x decknix-agent-dispatch-mode` can switch it then), and otherwise publish to control/, wait for the receipt and re-read the heartbeat. `off` first lists in-flight requests, which disarming settles `not-sent` (`disarmed`). The receipt reads `applied`.
+`decknix session dispatch status` exits 0 when the receiver is on, 14 when off, 15 with no fresh heartbeat, and shows who armed it, whether the watcher runs, the lanes the spawn cap counts against the cap (heartbeat `lanes_live` and `spawn_max_live`, from `decknix-agent-dispatch-lane-usage`), and request counts. `on` and `off` are no-ops (exit 0) when already in that state, exit 16 when the heartbeat shows no control watcher (only `M-x decknix-agent-dispatch-mode` can switch it then), and otherwise publish to control/, wait for the receipt and re-read the heartbeat. `off` first lists in-flight requests, which disarming settles `not-sent` (`disarmed`). The receipt reads `applied`.
 
 The receiver is armed at startup by default (`decknix-agent-dispatch-enable-on-start`, `armed_by: startup`; see section 8), so `dispatch on` is only needed after someone turned it off or disabled `enableOnStart`. Agents must ask the human before `dispatch on` and say when they turn it off; that rule lives in the session-messaging skill, since the CLI cannot tell who typed the command.

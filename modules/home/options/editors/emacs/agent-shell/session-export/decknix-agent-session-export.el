@@ -60,6 +60,7 @@
 (declare-function decknix-agent-dispatch-waiting-count "decknix-agent-dispatch" (sid))
 (declare-function decknix-agent-dispatch-last-delivered "decknix-agent-dispatch" (sid))
 (declare-function decknix-agent-dispatch-state "decknix-agent-dispatch" ())
+(declare-function decknix-agent-dispatch-lane-usage "decknix-agent-dispatch" ())
 (declare-function decknix--agent-tags-resolve "decknix-agent-tags-read" (conv-key session-id))
 (declare-function decknix--agent-current-conv-key "decknix-agent-buffer-lookup" ())
 
@@ -363,6 +364,8 @@ lookup per sweep."
   (setq decknix-agent-session-export--heartbeat-at now)
   (let ((state (and (fboundp 'decknix-agent-dispatch-state)
                     (ignore-errors (decknix-agent-dispatch-state))))
+        (lanes (and (fboundp 'decknix-agent-dispatch-lane-usage)
+                    (ignore-errors (decknix-agent-dispatch-lane-usage))))
         (bool (lambda (v) (if v t :false))))
     (decknix-agent-session-export--write
      "_emacs.json"
@@ -373,7 +376,9 @@ lookup per sweep."
            :armed_by (or (plist-get state :armed_by) :null)
            :control (funcall bool (bound-and-true-p decknix-agent-dispatch-control-mode))
            :remote_control (funcall bool (and (boundp 'decknix-agent-dispatch-remote-control)
-                                              decknix-agent-dispatch-remote-control)))
+                                              decknix-agent-dispatch-remote-control))
+           :lanes_live (or (plist-get lanes :lanes_live) :null)
+           :spawn_max_live (or (plist-get lanes :spawn_max_live) :null))
      t)))
 
 (defun decknix-agent-session-export-heartbeat-now ()

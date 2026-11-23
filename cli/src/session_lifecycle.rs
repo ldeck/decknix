@@ -54,8 +54,8 @@ pub fn spawn_agent_refusal(agent: &str) -> Option<String> {
 #[derive(Subcommand)]
 pub enum DispatchAction {
     /// Is the Emacs dispatch receiver on? Heartbeat age, who armed it,
-    /// whether the control watcher runs, request counts (exit 0 on, 14 off,
-    /// 15 no fresh heartbeat)
+    /// whether the control watcher runs, lanes against the spawn cap,
+    /// request counts (exit 0 on, 14 off, 15 no fresh heartbeat)
     Status {
         /// Emit JSON
         #[arg(long)]
@@ -631,6 +631,17 @@ fn waiting_ids(dispatch: &Path) -> Vec<String> {
     ids
 }
 
+/// The `lanes` line of `dispatch status`, when the heartbeat reports the cap.
+pub fn lanes_line(h: &Heartbeat) -> Option<String> {
+    let (n, cap) = (h.lanes_live?, h.spawn_max_live?);
+    Some(format!(
+        "{} of {}{} (spawned or lane-N tagged sessions; others do not count)",
+        n,
+        cap,
+        if n >= cap { " FULL: spawns are refused too-many-sessions" } else { "" }
+    ))
+}
+
 fn load_heartbeat(dirs: &Dirs) -> (Option<Heartbeat>, bool) {
     let hb = read_json(&dirs.sessions.join("_emacs.json")).and_then(|v| Heartbeat::from_value(&v));
     let fresh = hb.as_ref().map(|h| h.fresh(now_secs(), session_msg::pid_alive)).unwrap_or(false);
@@ -664,6 +675,8 @@ fn cmd_dispatch_status(json_out: bool) -> Result<i32> {
                 "armed_by": hb.as_ref().and_then(|h| h.armed_by.clone()),
                 "control": fresh && hb.as_ref().map(|h| h.control).unwrap_or(false),
                 "remote_control": hb.as_ref().and_then(|h| h.remote_control),
+                "lanes_live": hb.as_ref().and_then(|h| h.lanes_live),
+                "spawn_max_live": hb.as_ref().and_then(|h| h.spawn_max_live),
                 "pending": pending,
                 "queued": queued,
                 "inflight": inflight,
@@ -698,6 +711,9 @@ fn cmd_dispatch_status(json_out: bool) -> Result<i32> {
             "running (decknix session dispatch on|off)".to_string()
         }
     );
+    if let Some(line) = hb.as_ref().and_then(lanes_line) {
+        println!("lanes      {}", line);
+    }
     println!("requests   {} pending ({} queued spawn), {} in flight", pending, queued, inflight);
     Ok(code)
 }
@@ -828,6 +844,15 @@ mod tests {
         assert!(bad(&|s| s.agent = Some("claude-code".into())));
         assert!(bad(&|s| s.agent = Some("gpt".into())));
         assert!(!bad(&|s| s.agent = None));
+    }
+
+    #[test]
+    fn lanes_line_reports_the_cap_and_what_counts() {
+        let h = Heartbeat { pid: 1, at: 1, lanes_live: Some(3), spawn_max_live: Some(12), ..Default::default() };
+        assert_eq!(lanes_line(&h).unwrap(), "3 of 12 (spawned or lane-N tagged sessions; others do not count)");
+        let full = Heartbeat { lanes_live: Some(12), spawn_max_live: Some(12), ..h.clone() };
+        assert!(lanes_line(&full).unwrap().starts_with("12 of 12 FULL"));
+        assert!(lanes_line(&Heartbeat::default()).is_none());
     }
 
     #[test]

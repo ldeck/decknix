@@ -88,7 +88,7 @@ decknix session dispatch on --release-queued
 decknix session dispatch off
 ```
 
-`status` shows the heartbeat age, whether the receiver is on, when and by whom it was armed (`startup`, `human` or `control:<session>`), whether the control watcher runs, and how many requests are pending, queued and in flight. `on` and `off` do nothing (exit 0) when the receiver is already in that state. Without the control watcher they exit 16: only `M-x decknix-agent-dispatch-mode` can switch the receiver then. `off` lists the requests waiting in flight first; turning the receiver off settles them `not-sent`. A request to turn it on is refused when it was created before the watcher started, or while `decknix-agent-dispatch-remote-control` is nil (turning it off always works).
+`status` shows the heartbeat age, whether the receiver is on, when and by whom it was armed (`startup`, `human` or `control:<session>`), whether the control watcher runs, how many lanes the spawn cap counts against the cap (`lanes 3 of 12`, `FULL` when spawns would be refused), and how many requests are pending, queued and in flight. `on` and `off` do nothing (exit 0) when the receiver is already in that state. Without the control watcher they exit 16: only `M-x decknix-agent-dispatch-mode` can switch the receiver then. `off` lists the requests waiting in flight first; turning the receiver off settles them `not-sent`. A request to turn it on is refused when it was created before the watcher started, or while `decknix-agent-dispatch-remote-control` is nil (turning it off always works).
 
 ## Scale lanes: spawn and retire
 

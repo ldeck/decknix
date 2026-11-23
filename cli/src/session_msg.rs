@@ -115,6 +115,10 @@ pub struct Heartbeat {
     pub armed_by: Option<String>,
     /// Whether a control request may turn the receiver on.
     pub remote_control: Option<bool>,
+    /// Sessions the spawn cap counts now (spawned or lane-tagged).
+    pub lanes_live: Option<i64>,
+    /// `decknix-agent-dispatch-spawn-max-live`.
+    pub spawn_max_live: Option<i64>,
 }
 
 impl Heartbeat {
@@ -128,6 +132,8 @@ impl Heartbeat {
             armed_at: v.get("armed_at").and_then(Value::as_i64),
             armed_by: v.get("armed_by").and_then(Value::as_str).map(str::to_string),
             remote_control: v.get("remote_control").and_then(Value::as_bool),
+            lanes_live: v.get("lanes_live").and_then(Value::as_i64),
+            spawn_max_live: v.get("spawn_max_live").and_then(Value::as_i64),
         })
     }
 
@@ -1132,6 +1138,9 @@ mod tests {
         assert_eq!(h.remote_control, Some(false));
         let old = Heartbeat::from_value(&json!({"pid": 1, "at": 2})).unwrap();
         assert!(!old.control && old.armed_by.is_none());
+        assert!(old.lanes_live.is_none() && old.spawn_max_live.is_none());
+        let lanes = Heartbeat::from_value(&json!({"pid": 1, "at": 2, "lanes_live": 3, "spawn_max_live": 12})).unwrap();
+        assert_eq!((lanes.lanes_live, lanes.spawn_max_live), (Some(3), Some(12)));
     }
 
     #[test]

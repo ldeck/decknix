@@ -582,7 +582,7 @@ Inspect or switch the Emacs dispatch receiver
 Usage: decknix session dispatch <COMMAND>
 
 Commands:
-  status  Is the Emacs dispatch receiver on? Heartbeat age, who armed it, whether the control watcher runs, request counts (exit 0 on, 14 off, 15 no fresh heartbeat)
+  status  Is the Emacs dispatch receiver on? Heartbeat age, who armed it, whether the control watcher runs, lanes against the spawn cap, request counts (exit 0 on, 14 off, 15 no fresh heartbeat)
   on      Turn the receiver on through the control watcher (ask the human first)
   off     Turn the receiver off; waiting messages are settled `not-sent`
 
@@ -594,7 +594,7 @@ Options:
 ## `decknix session dispatch status`
 
 ```text
-Is the Emacs dispatch receiver on? Heartbeat age, who armed it, whether the control watcher runs, request counts (exit 0 on, 14 off, 15 no fresh heartbeat)
+Is the Emacs dispatch receiver on? Heartbeat age, who armed it, whether the control watcher runs, lanes against the spawn cap, request counts (exit 0 on, 14 off, 15 no fresh heartbeat)
 
 Usage: decknix session dispatch status [OPTIONS]
 

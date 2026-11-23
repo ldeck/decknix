@@ -1131,6 +1131,13 @@ live agent-shell buffer."
                 (or live (decknix-agent-dispatch--live-buffers)))
      (decknix-agent-dispatch--unstarted-count)))
 
+(defun decknix-agent-dispatch-lane-usage ()
+  "Plist (:lanes_live N :spawn_max_live CAP) for the heartbeat.
+N is what the spawn cap would compare now, from
+`decknix-agent-dispatch-counted-lanes'."
+  (list :lanes_live (decknix-agent-dispatch-counted-lanes)
+        :spawn_max_live decknix-agent-dispatch-spawn-max-live))
+
 (defun decknix-agent-dispatch--spawn-existing (id req buf info)
   "Report BUF as the lane spawn request ID asked for; start nothing."
   (let ((sid (ignore-errors (funcall decknix-agent-dispatch-session-id-function buf))))
