@@ -30,7 +30,7 @@ Emacs writes one JSON file per live agent-shell session plus a heartbeat (module
 ```
 $XDG_STATE_HOME/decknix/sessions/        (default ~/.local/state, dir 0700, files 0600)
   _emacs.json     {"v":1,"pid":…,"at":<epoch>,"interval":30,"receiver":true|false,
-                   "armed_at":<epoch>|null,"armed_by":"human"|"control:<id>"|null,
+                   "armed_at":<epoch>|null,"armed_by":"startup"|"human"|"control:<id>"|null,
                    "control":true|false,"remote_control":true|false}
   <session>.json  one per live session
 ```
@@ -137,6 +137,7 @@ Always refused: a session interrupting itself; a lane interrupted less than `dec
 ## 8. Decisions
 
 - **(user decision)** Interrupt policy default `coordinator`, coordinator tag `coordinator`, interruptible tag `interruptible`, minimum interval 300 s.
+- **(user decision, revised 2026-11-24)** The dispatch receiver is on from startup by default (Nix option `programs.emacs.decknix.agentShell.dispatch.enableOnStart`, `armed_by: startup`), armed after the control watcher; set the option false, or run `decknix session dispatch off`, to disable it. Arming at startup keeps the "requests from before arming are refused" protection: anything created before Emacs armed it, including spawns queued while Emacs was down, is refused `predates-arming`, because startup arming never sets `release_queued`. A coordinator that finds it off still asks the human before `dispatch on`. The text below records the earlier decision this revises.
 - **(user decision, revised for section 10)** The dispatch receiver stays off on install and at startup; the exporter is on by default. Originally only the human could arm it. It can now also be armed by a `dispatch on` control request, through the separately enabled control watcher, so a coordinator that finds `receiver: false` asks the human in one line and, only after a yes, runs `decknix session dispatch on` itself. `send` still refuses (exit 14) rather than queue a request that arming would refuse. The receiver is still never armed automatically: control requests created before the watcher started are refused and live at most 300 s, so nothing queued while Emacs was down can arm it, and the "requests from before arming are refused" protection is kept except for spawns queued with `--queue` and released explicitly with `--release-queued`.
 - **(user decision)** Lifecycle policy default `coordinator` (the sender must carry a coordinator tag), spawn roots `~/Code` and `~/tools`, at most 12 lanes (spawned or `lane-N` tagged sessions; other sessions do not count), 10 s between spawns, protected tag `coordinator`. The control watcher runs by default (Nix option `programs.emacs.decknix.agentShell.dispatch.remoteControl.enable`); `decknix-agent-dispatch-remote-control` set to nil refuses remote `on` while still honouring `off`.
 - Background threshold 120 s and the 24 h idle TTL are variables (`decknix-agent-session-export-background-seconds`, CLI `--ttl`).
@@ -184,4 +185,4 @@ The receiver refuses: policy (`lifecycle-not-allowed`); a self-retire without fo
 
 `decknix session dispatch status` exits 0 when the receiver is on, 14 when off, 15 with no fresh heartbeat, and shows who armed it, whether the watcher runs, and request counts. `on` and `off` are no-ops (exit 0) when already in that state, exit 16 when the heartbeat shows no control watcher (only `M-x decknix-agent-dispatch-mode` can switch it then), and otherwise publish to control/, wait for the receipt and re-read the heartbeat. `off` first lists in-flight requests, which disarming settles `not-sent` (`disarmed`). The receipt reads `applied`.
 
-Agents must ask the human before `dispatch on` and say when they turn it off; that rule lives in the session-messaging skill, since the CLI cannot tell who typed the command.
+The receiver is armed at startup by default (`decknix-agent-dispatch-enable-on-start`, `armed_by: startup`; see section 8), so `dispatch on` is only needed after someone turned it off or disabled `enableOnStart`. Agents must ask the human before `dispatch on` and say when they turn it off; that rule lives in the session-messaging skill, since the CLI cannot tell who typed the command.

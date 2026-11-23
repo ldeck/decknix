@@ -2,19 +2,21 @@
 
 `decknix-agent-dispatch` hands one prompt to one live agent-shell session, only when you have asked for exactly that. It is built for a coordinator agent that needs to message an existing session, and it is deliberately hard to misuse.
 
-Nothing is sent by installing it. Delivery needs both an explicit `send` for a specific session and the receiver switched on in Emacs.
+Nothing is sent by installing it. Delivery needs both an explicit `send` for a specific session and the receiver switched on in Emacs (it is on from startup by default).
 
 For coordinators, prefer `decknix session send` ([Session messaging](./session-messaging.md)): it resolves a session by tag or buffer name, shows the session's state first, waits up to 24 h for an idle point, supports `--when now` and `--when interrupt`, and records `answered` receipts. It writes version 2 requests to the same receiver; this script keeps writing version 1 requests with the behaviour described below.
 
-## Turn the receiver on (once per Emacs run)
+## The receiver: on from startup
+
+The receiver (`decknix-agent-dispatch-mode`) is turned on when Emacs starts, after the control watcher, and the heartbeat records `armed_by: startup`. To keep it off at startup set `programs.emacs.decknix.agentShell.dispatch.enableOnStart = false`; to turn it off for the current run use `decknix session dispatch off` or toggle it by hand:
 
 ```
 M-x decknix-agent-dispatch-mode
 ```
 
-It is off by default and never enabled at startup. Turning it on creates the private state directory, settles anything left over from a previous run as `unknown` or `not-sent` (never retried), and ignores every request created before that moment. Turning it off settles waiting requests as `not-sent`.
+Arming it at startup replays nothing: every request created before that moment is refused (`predates-arming`), including spawns queued with `--queue` while Emacs was down, so re-issue anything still wanted once Emacs is up. Turning it on creates the private state directory, settles anything left over from a previous run as `unknown` or `not-sent` (never retried), and ignores every request created before that moment. Turning it off settles waiting requests as `not-sent`.
 
-An agent can also switch it with `decknix session dispatch on|off` ([Session messaging](./session-messaging.md#the-receiver)), through the control watcher (`decknix-agent-dispatch-control-mode`, on by default; disable it with `programs.emacs.decknix.agentShell.dispatch.remoteControl.enable = false`). The watcher delivers nothing itself, refuses requests created before it started, and records who armed the receiver (`human` or `control:<session>`). Agents are expected to ask you before turning it on.
+An agent can also switch it with `decknix session dispatch on|off` ([Session messaging](./session-messaging.md#the-receiver)), through the control watcher (`decknix-agent-dispatch-control-mode`, on by default; disable it with `programs.emacs.decknix.agentShell.dispatch.remoteControl.enable = false`). The watcher delivers nothing itself, refuses requests created before it started, and records who armed the receiver (`startup`, `human` or `control:<session>`). Agents are expected to ask you before turning it on.
 
 ## Send
 

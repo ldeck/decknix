@@ -111,7 +111,7 @@ pub struct Heartbeat {
     /// The control watcher is running, so `session dispatch on|off` works.
     pub control: bool,
     pub armed_at: Option<i64>,
-    /// `human` or `control:<sender>`.
+    /// `startup`, `human` or `control:<sender>`.
     pub armed_by: Option<String>,
     /// Whether a control request may turn the receiver on.
     pub remote_control: Option<bool>,

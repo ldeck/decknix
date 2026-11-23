@@ -2883,7 +2883,8 @@ let
   # CLI drops a private request file naming ONE full session UUID; this module
   # delivers it at most once through `decknix--compose-submit-after-wait' and
   # writes a receipt.  Installing it is inert: no timer, watch or directory
-  # exists until the user turns on `decknix-agent-dispatch-mode'.  The submit,
+  # exists until `decknix-agent-dispatch-mode' is on (at startup by default,
+  # `dispatch.enableOnStart').  The submit,
   # session-id and buffer lookups are injectable seams, so the suite never
   # reaches a real session.  See the Emacs AGENTS.md "Agent dispatch" section.
   decknix-agent-dispatch-el = mkEmacsTestedPackage {
@@ -3364,12 +3365,29 @@ in
         Run the dispatch control watcher, so `decknix session dispatch on`
         and `off` can switch the agent dispatch receiver
         (`decknix-agent-dispatch-mode`) without the human typing the
-        command. The receiver itself stays off until armed, by the human or
-        by such a request; the watcher delivers nothing, refuses requests
+        command. The receiver is armed at startup unless
+        `dispatch.enableOnStart` is off, and otherwise by the human or by
+        such a request; the watcher delivers nothing, refuses requests
         created before it started, and still honours `off` when the Emacs
         variable `decknix-agent-dispatch-remote-control` forbids `on`.
         Disable to make arming a manual `M-x decknix-agent-dispatch-mode`
         only.
+      '';
+    };
+
+    dispatch.enableOnStart = mkOption {
+      type = types.bool;
+      default = true;
+      description = ''
+        Turn the agent dispatch receiver (`decknix-agent-dispatch-mode`) on
+        when Emacs starts, after the control watcher, so `decknix session
+        send`, `spawn` and `retire` work without arming it first. The
+        heartbeat records `armed_by: startup`. Requests created before that
+        moment are still refused (`predates-arming`) and queued spawns are
+        not released, so nothing written while Emacs was down is replayed.
+        Disable to keep the receiver off until the human (`M-x
+        decknix-agent-dispatch-mode`) or `decknix session dispatch on` arms
+        it; `decknix session dispatch off` turns it off for the current run.
       '';
     };
 
@@ -4265,8 +4283,8 @@ in
         (add-hook 'decknix-agent-dispatch-mode-hook
                   #'decknix-agent-session-export-heartbeat-now)
         ;; Control watcher (`decknix session dispatch on|off').  The receiver
-        ;; itself stays inert until armed; this watcher is the one exception
-        ;; to that rule and runs by default, because it delivers nothing: it
+        ;; itself stays inert until armed (by default at startup, below); this
+        ;; watcher runs by default too, because it delivers nothing: it
         ;; only lets an agent turn the receiver on (after asking the human,
         ;; per the session-messaging skill) or off.  Requests created before
         ;; it started are refused, so nothing queued while Emacs was down can
@@ -4281,6 +4299,15 @@ in
               (decknix-agent-dispatch-control-mode 1)
             (error (message "decknix-agent-dispatch-control: not started: %s"
                             (error-message-string err)))))
+        ''}
+        ;; Receiver on at startup (`dispatch.enableOnStart', default on),
+        ;; after the watcher and the heartbeat hook so the heartbeat says
+        ;; `armed_by: startup' at once.  Arming is the moment requests are
+        ;; dated against: anything created earlier is refused
+        ;; `predates-arming', so a restart never replays a stale request.
+        ${optionalString cfg.dispatch.enableOnStart ''
+        (declare-function decknix-agent-dispatch-enable-on-start "decknix-agent-dispatch")
+        (decknix-agent-dispatch-enable-on-start)
         ''}
         (require 'decknix-agent-format)
         (declare-function decknix--agent-session-time-ago "decknix-agent-format")

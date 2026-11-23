@@ -69,7 +69,10 @@
 ;;
 ;; Installing this package is inert: it defines functions and a global minor
 ;; mode, and starts no timer, watch or directory.  Delivery only happens while
-;; `decknix-agent-dispatch-mode' is on, which is a deliberate user action.
+;; `decknix-agent-dispatch-mode' is on.  The decknix init turns it on at
+;; startup by default (`decknix-agent-dispatch-enable-on-start', Nix option
+;; `programs.emacs.decknix.agentShell.dispatch.enableOnStart'); requests
+;; created before arming are still refused, so a start replays nothing.
 
 ;;; Code:
 
@@ -1452,7 +1455,8 @@ Keys: :on, :armed_at, :armed_by and :release_queued."
 (define-minor-mode decknix-agent-dispatch-mode
   "Deliver explicitly requested prompts to live agent-shell sessions.
 
-Off by default and never enabled automatically.  While on, a request file
+Off until armed: by the human, by a control request, or at startup through
+`decknix-agent-dispatch-enable-on-start'.  While on, a request file
 dropped by the `decknix-agent-dispatch' CLI is delivered at most once to the
 single session whose full id it names.  Turning the mode off settles every
 waiting request as not sent.  Requests created before the mode was turned on
@@ -1467,6 +1471,22 @@ are refused, so enabling it cannot release old requests."
                (decknix-agent-dispatch--stop)
                (signal (car err) (cdr err))))
     (decknix-agent-dispatch--stop)))
+
+(defun decknix-agent-dispatch-enable-on-start ()
+  "Arm the receiver while Emacs starts, recording `startup' as who armed it.
+Called from init when the Nix option
+`programs.emacs.decknix.agentShell.dispatch.enableOnStart' is on.  Arming
+here is like any other: requests created before it are refused
+`predates-arming' and nothing queued is released, so nothing written while
+Emacs was down is replayed.  An armed receiver is left alone, and a failure
+is reported rather than signalled so the rest of init still runs."
+  (unless decknix-agent-dispatch-mode
+    (condition-case err
+        (let ((decknix-agent-dispatch-arming-source "startup")
+              (decknix-agent-dispatch-arming-release-queued nil))
+          (decknix-agent-dispatch-mode 1))
+      (error (message "decknix-agent-dispatch: not armed at startup: %s"
+                      (error-message-string err))))))
 
 (provide 'decknix-agent-dispatch)
 ;;; decknix-agent-dispatch.el ends here

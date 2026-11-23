@@ -605,6 +605,51 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
     (should-not dispatch-test--sent)
     (should (equal "predates-arming" (plist-get (dispatch-test--receipt) :reason)))))
 
+(ert-deftest decknix-agent-dispatch/enable-on-start-arms-as-startup-and-refuses-older-requests ()
+  (dispatch-test-with-env
+    (setq decknix-agent-dispatch--armed-at nil)
+    (dispatch-test--make-session "target" dispatch-test--sid)
+    (dispatch-test--drop :created (- dispatch-test--clock 5))
+    (dispatch-test--drop3 "spawn" :id dispatch-test--rid-2
+                          :created_at (- dispatch-test--clock 5) :queue t)
+    (unwind-protect
+        (progn
+          (decknix-agent-dispatch-enable-on-start)
+          (should decknix-agent-dispatch-mode)
+          (should (equal "startup" (plist-get (decknix-agent-dispatch-state) :armed_by)))
+          (should (eql dispatch-test--clock (plist-get (decknix-agent-dispatch-state) :armed_at)))
+          (should-not decknix-agent-dispatch--release-queued)
+          (decknix-agent-dispatch--tick)
+          (should-not dispatch-test--sent)
+          (should-not dispatch-test--spawned)
+          (should (equal "predates-arming" (plist-get (dispatch-test--receipt) :reason)))
+          (should (equal "predates-arming"
+                         (plist-get (dispatch-test--receipt dispatch-test--rid-2) :reason))))
+      (decknix-agent-dispatch-mode -1))))
+
+(ert-deftest decknix-agent-dispatch/enable-on-start-leaves-an-armed-receiver-alone ()
+  (dispatch-test-with-env
+    (unwind-protect
+        (progn
+          (decknix-agent-dispatch-mode 1)
+          (decknix-agent-dispatch-enable-on-start)
+          (should (equal "human" (plist-get (decknix-agent-dispatch-state) :armed_by))))
+      (decknix-agent-dispatch-mode -1))))
+
+(ert-deftest decknix-agent-dispatch/enable-on-start-reports-rather-than-signals ()
+  (let* ((root (make-temp-file "dispatch-mode" t))
+         (decknix-agent-dispatch-dir (expand-file-name "state" root)))
+    (unwind-protect
+        (progn
+          (make-directory decknix-agent-dispatch-dir)
+          (make-directory (expand-file-name "pending" decknix-agent-dispatch-dir))
+          (cl-letf (((symbol-function 'decknix-agent-dispatch--ensure-dirs) #'ignore))
+            (set-file-modes decknix-agent-dispatch-dir #o755)
+            (decknix-agent-dispatch-enable-on-start))
+          (should-not decknix-agent-dispatch-mode))
+      (decknix-agent-dispatch-mode -1)
+      (delete-directory root t))))
+
 (ert-deftest decknix-agent-dispatch/internal-error-settles-fail-closed ()
   (dispatch-test-with-env
     (dispatch-test--make-session "target" dispatch-test--sid)

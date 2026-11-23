@@ -5,7 +5,7 @@
 Two pieces run in Emacs:
 
 - **State export** (`decknix-agent-session-export-mode`, on by default). Read-only: one small JSON file per live session plus a heartbeat in `~/.local/state/decknix/sessions/`, rewritten only when something changed.
-- **Dispatch receiver** (`M-x decknix-agent-dispatch-mode`, off by default, see [Agent dispatch](./agent-dispatch.md)). Nothing is delivered, spawned or retired unless it is on in this Emacs run. You turn it on, or an agent does with `decknix session dispatch on` after asking you (see [The receiver](#the-receiver)).
+- **Dispatch receiver** (`decknix-agent-dispatch-mode`, on from startup by default, see [Agent dispatch](./agent-dispatch.md)). Nothing is delivered, spawned or retired unless it is on in this Emacs run. Disable it at startup with `programs.emacs.decknix.agentShell.dispatch.enableOnStart = false`, or for this run with `decknix session dispatch off`; when it is off, you turn it back on (`M-x decknix-agent-dispatch-mode`), or an agent does with `decknix session dispatch on` after asking you (see [The receiver](#the-receiver)). Requests created before it was armed, at startup or later, are refused, so a restart replays nothing.
 - **Control watcher** (`decknix-agent-dispatch-control-mode`, on by default, Nix option `programs.emacs.decknix.agentShell.dispatch.remoteControl.enable`). It delivers nothing; it only lets `decknix session dispatch on|off` switch the receiver.
 
 ## Find a session
@@ -83,12 +83,12 @@ decknix session inbox --clear                 # notices for messages sent with -
 
 ```bash
 decknix session dispatch status      # exit 0 on, 14 off, 15 no fresh heartbeat
-decknix session dispatch on          # ask the human first
+decknix session dispatch on          # only when it is off: ask the human first
 decknix session dispatch on --release-queued
 decknix session dispatch off
 ```
 
-`status` shows the heartbeat age, whether the receiver is on, when and by whom it was armed (`human` or `control:<session>`), whether the control watcher runs, and how many requests are pending, queued and in flight. `on` and `off` do nothing (exit 0) when the receiver is already in that state. Without the control watcher they exit 16: only `M-x decknix-agent-dispatch-mode` can switch the receiver then. `off` lists the requests waiting in flight first; turning the receiver off settles them `not-sent`. A request to turn it on is refused when it was created before the watcher started, or while `decknix-agent-dispatch-remote-control` is nil (turning it off always works).
+`status` shows the heartbeat age, whether the receiver is on, when and by whom it was armed (`startup`, `human` or `control:<session>`), whether the control watcher runs, and how many requests are pending, queued and in flight. `on` and `off` do nothing (exit 0) when the receiver is already in that state. Without the control watcher they exit 16: only `M-x decknix-agent-dispatch-mode` can switch the receiver then. `off` lists the requests waiting in flight first; turning the receiver off settles them `not-sent`. A request to turn it on is refused when it was created before the watcher started, or while `decknix-agent-dispatch-remote-control` is nil (turning it off always works).
 
 ## Scale lanes: spawn and retire
 
@@ -104,7 +104,7 @@ decknix session retire lane-07,team-a --reason "parser work merged"
 - otherwise one saved session carrying them is resumed in the background (exit 23 when it was recorded in another workspace; several exit 21, or pass `--no-resume` to start fresh);
 - otherwise a new session starts in the background with the brief as its first message, prefixed `[decknix spawn <id> from <sender>]`.
 
-`--agent` is `claude` (the default), `auggie` or `pi`; any other name exits 2 with that list before a request is written. It waits up to `--wait` seconds (180) and prints the new session id. In Emacs the receiver repeats the checks and adds its own: the workspace must be under `decknix-agent-dispatch-spawn-roots` (`~/Code`, `~/tools`), at most `decknix-agent-dispatch-spawn-max-live` (12) lanes, counting the sessions spawns started and any session tagged `lane-<digits>` (`decknix-agent-dispatch-spawn-counted-tag-regexp`) but not auto-review or other sessions, one spawn per `decknix-agent-dispatch-spawn-min-interval` (10 s; a refused or failed spawn does not count), and the sender must satisfy `decknix-agent-dispatch-lifecycle-policy` (`coordinator` by default: the sender carries a coordinator tag). With the receiver off `spawn` exits 14; `--queue` writes the request anyway, to run when someone arms the receiver with `--release-queued`.
+`--agent` is `claude` (the default), `auggie` or `pi`; any other name exits 2 with that list before a request is written. It waits up to `--wait` seconds (180) and prints the new session id. In Emacs the receiver repeats the checks and adds its own: the workspace must be under `decknix-agent-dispatch-spawn-roots` (`~/Code`, `~/tools`), at most `decknix-agent-dispatch-spawn-max-live` (12) lanes, counting the sessions spawns started and any session tagged `lane-<digits>` (`decknix-agent-dispatch-spawn-counted-tag-regexp`) but not auto-review or other sessions, one spawn per `decknix-agent-dispatch-spawn-min-interval` (10 s; a refused or failed spawn does not count), and the sender must satisfy `decknix-agent-dispatch-lifecycle-policy` (`coordinator` by default: the sender carries a coordinator tag). With the receiver off `spawn` exits 14; `--queue` writes the request anyway, to run when someone arms the receiver with `--release-queued`; a request queued while Emacs is down is refused when the receiver arms at startup, since that arming releases nothing.
 
 `retire` quits one live session named exactly: its full id, its buffer name, or tags only it carries, matched exactly or ignoring case. An id prefix or a normalised match exits 21. It waits for the session's turn to end (`--force` does not wait), never retires a session holding text you typed but did not send or carrying a protected tag (`coordinator` by default), refuses when the session's tags changed since you looked, and checks that the buffer is really gone. Retiring your own session needs `--force`. The saved record stays, so spawning the same tags later resumes it.
 

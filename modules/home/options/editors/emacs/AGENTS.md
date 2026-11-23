@@ -1317,9 +1317,16 @@ attachment, or `claude --resume` against a running session:
 
 Rules the code and tests pin (do not weaken):
 
-- **Inert on install.** The package defines functions and a global minor mode.
-  No timer, file watch or directory exists until it is armed, and nothing
-  arms it at startup. Arming is either the human (`M-x
+- **Inert on install, armed at startup by the init.** The package defines
+  functions and a global minor mode. No timer, file watch or directory exists
+  until it is armed. The decknix init arms it at startup by default, after
+  the control watcher (`decknix-agent-dispatch-enable-on-start`, `armed_by:
+  startup`, Nix option
+  `programs.emacs.decknix.agentShell.dispatch.enableOnStart`; disable with
+  the option or `decknix session dispatch off`). Startup arming is an
+  ordinary arming: requests created before it are refused `predates-arming`
+  and it never sets `release_queued`, so a restart replays nothing queued
+  while Emacs was down. Otherwise arming is the human (`M-x
   decknix-agent-dispatch-mode`, `armed_by: human`) or a `dispatch on` control
   request applied by the separately enabled control watcher
   (`agent-shell/dispatch-control/`, `decknix-agent-dispatch-control-mode`,
