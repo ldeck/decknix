@@ -42,6 +42,15 @@ const RETIRE_TTL_SECS: i64 = 3600;
 const MAX_TAG_CHARS: usize = 80;
 const MAX_REASON_CHARS: usize = 300;
 
+/// Agent names `spawn` accepts: the receiver maps each to its provider id
+/// (`decknix-agent-dispatch-agent-providers`; `claude` is `claude-code`).
+pub const SPAWN_AGENTS: &[&str] = &["claude", "auggie", "pi"];
+
+pub fn spawn_agent_refusal(agent: &str) -> Option<String> {
+    (!SPAWN_AGENTS.contains(&agent))
+        .then(|| format!("unknown agent {:?}; use one of: {}", agent, SPAWN_AGENTS.join(", ")))
+}
+
 #[derive(Subcommand)]
 pub enum DispatchAction {
     /// Is the Emacs dispatch receiver on? Heartbeat age, who armed it,
@@ -125,6 +134,9 @@ pub fn build_spawn_request(id: &str, spec: &SpawnSpec, now: i64) -> Result<Value
     }
     if let Some(r) = spec.resume_session_id.as_ref().filter(|r| !session_msg::strict_uuid(r)) {
         bail!("resume id must be a full lowercase UUID: {}", r);
+    }
+    if let Some(why) = spec.agent.as_deref().and_then(spawn_agent_refusal) {
+        bail!(why);
     }
     let mut req = json!({
         "v": 3,
@@ -399,6 +411,10 @@ pub fn cmd_spawn(
     from: Option<String>,
     json_out: bool,
 ) -> Result<i32> {
+    if let Some(why) = spawn_agent_refusal(&agent) {
+        eprintln!("{}", why);
+        return Ok(EXIT_USAGE);
+    }
     let ws = expand_dir(workspace);
     if !ws.is_dir() {
         eprintln!("workspace does not exist: {}", ws.display());
@@ -809,6 +825,24 @@ mod tests {
         assert!(bad(&|s| s.ttl = MAX_TTL_SECS + 1));
         assert!(bad(&|s| s.resume_session_id = Some("1111".into())));
         assert!(!bad(&|s| s.resume_session_id = Some(LANE.into())));
+        assert!(bad(&|s| s.agent = Some("claude-code".into())));
+        assert!(bad(&|s| s.agent = Some("gpt".into())));
+        assert!(!bad(&|s| s.agent = None));
+    }
+
+    #[test]
+    fn spawn_agents_are_the_names_the_receiver_maps() {
+        assert_eq!(SPAWN_AGENTS, &["claude", "auggie", "pi"]);
+        for a in SPAWN_AGENTS {
+            assert!(spawn_agent_refusal(a).is_none(), "{} must be accepted", a);
+            let mut s = spawn_spec();
+            s.agent = Some(a.to_string());
+            assert_eq!(build_spawn_request(RID, &s, 0).unwrap()["agent"], json!(a));
+        }
+        for a in ["", "Claude", "claude-code", "codex", "gpt"] {
+            let why = spawn_agent_refusal(a).expect(a);
+            assert!(why.contains("claude, auggie, pi"), "{}: {}", a, why);
+        }
     }
 
     #[test]

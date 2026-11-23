@@ -499,7 +499,7 @@ Options:
           Tags the lane carries (comma-separated or repeated); all must match for an existing session to count as this lane
 
       --agent <AGENT>
-          Which agent: claude, auggie, pi, ...
+          Which agent: claude, auggie or pi
 
           [default: claude]
 

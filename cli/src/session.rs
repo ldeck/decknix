@@ -169,7 +169,7 @@ pub enum SessionAction {
         /// for an existing session to count as this lane
         #[arg(long = "tag", required = true)]
         tags: Vec<String>,
-        /// Which agent: claude, auggie, pi, ...
+        /// Which agent: claude, auggie or pi
         #[arg(long, default_value = "claude")]
         agent: String,
         /// Buffer name (default: the tags joined with `/`)
