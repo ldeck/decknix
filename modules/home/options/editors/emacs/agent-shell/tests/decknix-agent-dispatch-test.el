@@ -97,6 +97,9 @@
           (decknix-agent-dispatch-spawn-roots (list root))
           (decknix-agent-dispatch-spawn-max-live 32)
           (decknix-agent-dispatch-spawn-min-interval 10)
+          (decknix-agent-dispatch-spawn-busy-check-above 32)
+          (decknix-agent-dispatch-spawn-busy-max-drift-ms 500)
+          (decknix-agent-dispatch-main-loop-drift-function #'ignore)
           (decknix-agent-dispatch-retire-protected-tags '("coordinator"))
           (decknix-agent-dispatch-live-tags-function
            (lambda (buf) (alist-get buf dispatch-test--buf-tags)))
@@ -1210,6 +1213,58 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
 
 (ert-deftest decknix-agent-dispatch/spawn-cap-defaults-to-32-lanes ()
   (should (= 32 (eval (car (get 'decknix-agent-dispatch-spawn-max-live 'standard-value)) t))))
+
+(defun dispatch-test--busy-spawn (lanes drift)
+  "Drop a spawn with LANES lanes live and DRIFT ms of poll lateness.
+Return (REASON . CHECKED), CHECKED non-nil when the drift was measured."
+  (let (checked)
+    (setq decknix-agent-dispatch-spawn-max-live 64
+          decknix-agent-dispatch-spawn-busy-check-above 32
+          decknix-agent-dispatch-spawn-busy-max-drift-ms 500
+          decknix-agent-dispatch-main-loop-drift-function
+          (lambda () (setq checked t) drift))
+    (dotimes (i lanes)
+      (dispatch-test--lane (format "l%d" i)
+                           (format "%08d-2222-4333-8444-555555555555" i)
+                           (list (format "lane-%02d" i))))
+    (dispatch-test--drop3 "spawn" :tags ["PLAT-9"])
+    (decknix-agent-dispatch--tick)
+    (cons (plist-get (dispatch-test--receipt) :reason) checked)))
+
+(ert-deftest decknix-agent-dispatch/busy-guard-refuses-above-the-lane-threshold-when-emacs-lags ()
+  (dispatch-test-with-env
+    (should (equal '("emacs-busy" . t) (dispatch-test--busy-spawn 32 800)))
+    (should-not dispatch-test--spawned)))
+
+(ert-deftest decknix-agent-dispatch/busy-guard-accepts-above-the-lane-threshold-when-responsive ()
+  (dispatch-test-with-env
+    (should (equal '(nil . t) (dispatch-test--busy-spawn 32 120)))
+    (should (equal "accepted" (plist-get (dispatch-test--receipt) :state)))))
+
+(ert-deftest decknix-agent-dispatch/busy-guard-never-measures-below-the-lane-threshold ()
+  (dispatch-test-with-env
+    (should (equal '(nil . nil) (dispatch-test--busy-spawn 31 5000)))
+    (should (equal "accepted" (plist-get (dispatch-test--receipt) :state)))))
+
+(ert-deftest decknix-agent-dispatch/busy-guard-threshold-defaults-to-the-default-cap ()
+  (should (= 32 (eval (car (get 'decknix-agent-dispatch-spawn-busy-check-above 'standard-value)) t)))
+  (should (= 500 (eval (car (get 'decknix-agent-dispatch-spawn-busy-max-drift-ms 'standard-value)) t))))
+
+(ert-deftest decknix-agent-dispatch/poll-drift-is-the-worst-lateness-in-the-window ()
+  (let ((decknix-agent-dispatch-poll-interval 2)
+        (decknix-agent-dispatch-busy-window 30)
+        (decknix-agent-dispatch--last-poll-at nil)
+        (decknix-agent-dispatch--poll-drifts nil))
+    (should-not (decknix-agent-dispatch--recent-drift-ms 100.0))
+    (decknix-agent-dispatch--note-poll 100.0)
+    (decknix-agent-dispatch--note-poll 102.1)
+    (decknix-agent-dispatch--note-poll 105.0)
+    (decknix-agent-dispatch--note-poll 105.0)
+    (should (= 900 (decknix-agent-dispatch--recent-drift-ms 105.0)))
+    (should-not (decknix-agent-dispatch--recent-drift-ms 136.0))
+    (decknix-agent-dispatch--note-poll 138.0)
+    (should (= 31000 (decknix-agent-dispatch--recent-drift-ms 138.0)))
+    (should (= 1 (length decknix-agent-dispatch--poll-drifts)))))
 
 (ert-deftest decknix-agent-dispatch/lane-usage-reports-counted-lanes-and-the-cap ()
   (dispatch-test-with-env

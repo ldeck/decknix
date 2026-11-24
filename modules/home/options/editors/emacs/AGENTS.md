@@ -1388,7 +1388,12 @@ Rules the code and tests pin (do not weaken):
   spawned or resumed, live sessions with a tag matching
   `-spawn-counted-tag-regexp` (default `lane-<digits>`) and unstarted
   spawns, never auto-review or human sessions) and interval (`-spawn-min-interval`, 10 s, from the last spawn
-  that did not end `spawn-failed`: a failure gives its slot back). The
+  that did not end `spawn-failed`: a failure gives its slot back), then,
+  from `-spawn-busy-check-above` (32) counted lanes up, a responsiveness
+  check (`emacs-busy` when the 2 s poll timer, `decknix-agent-dispatch--poll`,
+  fired more than `-spawn-busy-max-drift-ms` (500 ms) late in the last 30 s;
+  the lateness is a timestamp per tick, no extra timer, and the measure
+  seam is `decknix-agent-dispatch-main-loop-drift-function`). The
   accepted receipt is written BEFORE the start, so nothing restarts it; the
   start goes through the spawn throttle in the background
   (`decknix--agent-quickaction-start` with BACKGROUND, or

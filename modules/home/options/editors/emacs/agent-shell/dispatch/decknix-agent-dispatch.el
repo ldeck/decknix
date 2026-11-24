@@ -204,6 +204,22 @@ sessions."
   :type '(choice (const :tag "Spawned sessions only" nil) regexp)
   :group 'decknix-agent-dispatch)
 
+(defcustom decknix-agent-dispatch-spawn-busy-check-above 32
+  "Counted lanes at or above which a spawn first checks Emacs keeps up.
+At or above it, a spawn is refused `emacs-busy' while the poll timer has
+recently fired more than `decknix-agent-dispatch-spawn-busy-max-drift-ms'
+late: every lane adds sidebar, export and render work to this one main
+loop, so past the default cap a lagging Emacs is the signal to stop.  Nil
+never checks."
+  :type '(choice (const :tag "Never check" nil) integer)
+  :group 'decknix-agent-dispatch)
+
+(defcustom decknix-agent-dispatch-spawn-busy-max-drift-ms 500
+  "Worst recent poll-timer lateness, in ms, a spawn may see above the threshold.
+See `decknix-agent-dispatch-spawn-busy-check-above'."
+  :type 'integer
+  :group 'decknix-agent-dispatch)
+
 (defcustom decknix-agent-dispatch-spawn-min-interval 10
   "Seconds after one spawn before another may start (`spawn-rate-limited')."
   :type 'integer
@@ -269,6 +285,13 @@ background task it started runs, which can be hours.")
 (defvar decknix-agent-dispatch-poll-interval 2
   "Seconds between scans; file-notify only makes a scan happen sooner.")
 
+(defvar decknix-agent-dispatch-busy-window 30
+  "Seconds of poll-timer lateness the busy check looks back over.")
+
+(defvar decknix-agent-dispatch-main-loop-drift-function
+  #'decknix-agent-dispatch--recent-drift-ms
+  "Returns the worst recent main-loop lateness in ms, or nil when unmeasured.")
+
 (defvar decknix-agent-dispatch-clock-skew 60
   "Seconds a request's creation time may lead the receiver's clock.")
 
@@ -328,6 +351,10 @@ Same SPEC and CALLBACK contract as `decknix-agent-dispatch-spawn-function'.")
 (defvar decknix-agent-dispatch--last-spawn-at nil
   "Epoch second of the last spawn or resume started, for the rate limit.")
 (defvar decknix-agent-dispatch--timer nil)
+(defvar decknix-agent-dispatch--last-poll-at nil
+  "Float time the poll timer last fired, for its lateness.")
+(defvar decknix-agent-dispatch--poll-drifts nil
+  "Recent poll-timer lateness, newest first: (AT . MS).")
 (defvar decknix-agent-dispatch--watch nil)
 (defvar decknix-agent-dispatch--kick nil)
 (defvar decknix-agent-dispatch--pending-seen nil
@@ -603,7 +630,34 @@ TAGS-OF maps a session id to its tags."
   (cond
    ((>= live decknix-agent-dispatch-spawn-max-live) "too-many-sessions")
    ((and last-at (< (- now last-at) decknix-agent-dispatch-spawn-min-interval))
-    "spawn-rate-limited")))
+    "spawn-rate-limited")
+   ((and decknix-agent-dispatch-spawn-busy-check-above
+         (>= live decknix-agent-dispatch-spawn-busy-check-above)
+         (let ((drift (funcall decknix-agent-dispatch-main-loop-drift-function)))
+           (and drift (> drift decknix-agent-dispatch-spawn-busy-max-drift-ms))))
+    "emacs-busy")))
+
+(defun decknix-agent-dispatch--note-poll (now)
+  "Record how late the poll timer fired at NOW, a float time.
+A late fire is the main loop having been busy.  Catch-up fires that Emacs
+runs back to back count as on time, so the worst entry is the real stall."
+  (when decknix-agent-dispatch--last-poll-at
+    (push (cons now (max 0 (round (* 1000 (- now decknix-agent-dispatch--last-poll-at
+                                             decknix-agent-dispatch-poll-interval)))))
+          decknix-agent-dispatch--poll-drifts))
+  (setq decknix-agent-dispatch--last-poll-at now
+        decknix-agent-dispatch--poll-drifts
+        (seq-take-while (lambda (e) (< (- now (car e)) decknix-agent-dispatch-busy-window))
+                        decknix-agent-dispatch--poll-drifts)))
+
+(defun decknix-agent-dispatch--recent-drift-ms (&optional now)
+  "Worst poll-timer lateness in ms within the window before NOW, or nil."
+  (let ((now (or now (float-time))))
+    (seq-reduce (lambda (worst e)
+                  (if (< (- now (car e)) decknix-agent-dispatch-busy-window)
+                      (max (or worst 0) (cdr e))
+                    worst))
+                decknix-agent-dispatch--poll-drifts nil)))
 
 (cl-defun decknix-agent-dispatch--retire-decide (&key matches changed protected
                                                        unsent busy force)
@@ -1376,6 +1430,11 @@ what froze typing (102 hitches, worst 19 s) while nothing was pending."
       (error (message "decknix-agent-dispatch: tick failed: %s"
                       (error-message-string err))))))
 
+(defun decknix-agent-dispatch--poll ()
+  "Poll timer: note how late it fired, then scan."
+  (decknix-agent-dispatch--note-poll (float-time))
+  (decknix-agent-dispatch--tick))
+
 (defun decknix-agent-dispatch--recover ()
   "Settle requests a previous receiver left in flight; never retries."
   (let ((ids (delete-dups
@@ -1423,12 +1482,14 @@ what froze typing (102 hitches, worst 19 s) while nothing was pending."
   (setq decknix-agent-dispatch--armed-at (decknix-agent-dispatch--now)
         decknix-agent-dispatch--armed-by (or decknix-agent-dispatch-arming-source "human")
         decknix-agent-dispatch--release-queued decknix-agent-dispatch-arming-release-queued
-        decknix-agent-dispatch--pending-seen nil)
+        decknix-agent-dispatch--pending-seen nil
+        decknix-agent-dispatch--last-poll-at nil
+        decknix-agent-dispatch--poll-drifts nil)
   (decknix-agent-dispatch--recover)
   (setq decknix-agent-dispatch--timer
         (run-with-timer decknix-agent-dispatch-poll-interval
                         decknix-agent-dispatch-poll-interval
-                        #'decknix-agent-dispatch--tick))
+                        #'decknix-agent-dispatch--poll))
   (setq decknix-agent-dispatch--watch
         (ignore-errors
           (file-notify-add-watch (decknix-agent-dispatch--sub "pending")
