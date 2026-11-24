@@ -1310,6 +1310,7 @@ Both are replaced, never mutated, when their data changes."
 (defconst decknix-sidebar-layout-ship-queue-faces
   '((failed . (:foreground "#ff5f5f" :weight bold))
     (ready  . (:foreground "#ffaf5f" :weight bold))
+    (merge  . (:foreground "#ffaf5f" :weight bold))
     (close  . (:foreground "#ffaf5f")))
   "Face per ship queue group: red failed, amber waiting on you.")
 
@@ -1322,7 +1323,8 @@ Both are replaced, never mutated, when their data changes."
   "Insert the ship queue GROUPS under the WIP heading.  Returns LINE-NUM.
 
 What deploys want of you, in one place: failed stages, stages waiting for
-you to promote them, tickets to close.  Hidden when there are none.  RET
+you to promote them, approved PRs no session was told to merge, tickets to
+close.  Hidden when there are none.  RET
 or TAB on a group lists its PRs; RET on a ticket offers its actions."
   (when groups
     (let ((key "ship-queue"))
@@ -1825,6 +1827,7 @@ costs no network; an absent file renders nothing rather than a guess."
     ("Deploy badges"
      ("✓" "stage done: ✓prd shipped there; +2✓ two more regions done")
      ("⇢" "ready for you to promote")
+     ("✓" "ship queue: approved and ready to merge, no session told")
      ("→" "deploying or verifying")
      ("·" "waiting for a stage that follows by itself")
      ("✗" "failed")

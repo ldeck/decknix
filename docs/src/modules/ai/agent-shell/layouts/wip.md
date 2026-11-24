@@ -114,8 +114,12 @@ and is hidden when empty:
 ```
 
 Failed stages come first, then stages waiting for you to promote them,
-grouped by region and stage, nearest production first, then tickets to
-close. A PR shipping several ways joins one group per shipper. Each row
+grouped by region and stage, nearest production first, then open PRs the
+hub found approved and ready to merge that no live session was told about
+(`approved · ready to merge ✓`, or `approved · comments to classify ✓`
+when threads or a human reply are still to handle; only with the hub's
+[merge-ready notifications](../../../../guides/decknix-hub.md#merge-ready-notifications)),
+then tickets to close. A PR shipping several ways joins one group per shipper. Each row
 names as many repos as fit, then `+N`. `RET` or `TAB` on a group lists its
 PRs; `RET` on a ticket offers the Jira actions. Stages that are unknown,
 in flight or done ask nothing and are left out.

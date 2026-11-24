@@ -1746,7 +1746,7 @@ to close is always its own row: it is the next thing to do."
 ;; --- ship queue ---------------------------------------------------------
 
 (defconst decknix-sidebar-layout-ship-queue-glyphs
-  '((failed . "✗") (ready . "⇢"))
+  '((failed . "✗") (ready . "⇢") (merge . "✓"))
   "Glyph per ship queue group kind, as on the stage badges.")
 
 (defun decknix--layout-stage-rank (stage)
@@ -1757,12 +1757,27 @@ to close is always its own row: it is the next thing to do."
           ((string-match-p "test" s) 1)
           (t 0))))
 
+(defun decknix--layout-merge-ready-label (pr)
+  "Return the ship queue label for open PR, when the hub found it ready to merge.
+
+The hub (`github.merge_ready_notify') marks my approved, green, mergeable
+PRs and messages the session that raised each one.  Only those it could
+not deliver (no live session claims the PR, the receiver is off, the send
+failed) are left for the human here; a delivered one is that session's."
+  (let ((mr (alist-get 'merge_ready (plist-get pr :pr))))
+    (when (and mr (not (equal (alist-get 'delivery mr) "sent")))
+      (if (equal (alist-get 'verdict mr) "comments")
+          "approved · comments to classify"
+        "approved · ready to merge"))))
+
 (defun decknix--layout-ship-queue (prs lines-of)
-  "Return the actionable ship groups among merged PRS, worst first.
+  "Return the actionable ship groups among PRS, worst first.
 
 Each group is (:kind KIND :label LABEL :prs MEMBERS :repos NAMES):
 `failed' then `ready', one per region and stage, nearest production
-first; then `close', one per ticket left open.  A PR shipping several
+first; then `merge', open PRs approved and ready to merge that no session
+was told about (see `decknix--layout-merge-ready-label'); then `close',
+one per ticket left open.  A PR shipping several
 ways joins one group per shipper.  LINES-OF returns a PR's ship lines;
 their `close KEY' next step is the ticket.  Unknown, in-flight and done
 shippers ask nothing and are left out.  A stale shipper, last read failed
@@ -1792,8 +1807,10 @@ or ready, stays in, and marks its group `:stale' t."
                        pr (plist-get s :stale)))))
             (let ((next (plist-get (funcall lines-of pr) :next)))
               (when (and next (string-prefix-p "close " next))
-                (add 'close next pr)))))))
-    (let ((kind-rank (lambda (g) (pcase (plist-get g :kind) ('failed 0) ('ready 1) (_ 2)))))
+                (add 'close next pr)))))
+        (let ((label (decknix--layout-merge-ready-label pr)))
+          (when label (add 'merge label pr)))))
+    (let ((kind-rank (lambda (g) (pcase (plist-get g :kind) ('failed 0) ('ready 1) ('merge 2) (_ 3)))))
       (sort (nreverse order)
             (lambda (a b)
               (let ((ka (funcall kind-rank a)) (kb (funcall kind-rank b)))

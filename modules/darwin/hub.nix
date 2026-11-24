@@ -15,6 +15,7 @@ let
       review_repos = cfg.github.reviewRepos;
       wip_merged_retention_days = cfg.github.mergedRetentionDays;
       issues_interval_secs = cfg.github.issuesInterval;
+      merge_ready_notify = cfg.github.mergeReadyNotify;
     };
     jira = {
       enabled = cfg.jira.enable;
@@ -129,6 +130,30 @@ in
         description = ''
           Seconds between polls of open GitHub issues assigned to me
           (github-issues.json, the sidebar Tasks section).  0 disables.
+        '';
+      };
+
+      mergeReadyNotify = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Tell the agent session that raised a PR when the PR is ready to
+          merge, for workflows that pre-authorise agents to merge their
+          own approved PRs.
+
+          After each WIP poll the hub classifies every open PR you authored.
+          One that is approved on its current head, not a draft, CI green
+          and mergeable is `clean` with nothing left to answer, or
+          `comments` with unresolved threads or a human reply since your
+          last activity.  The owning session (found through its linked and
+          created PRs) gets one `decknix session send --when idle` message
+          per head commit and verdict.  The hub never merges: the session
+          does, under its own repo and ship rules.
+
+          A ready PR no live session claims shows in the sidebar ship
+          queue as "approved · ready to merge" instead.  Dedupe state is
+          kept in `merge-ready-state.json` in the hub directory.  Off by
+          default because it prompts live sessions.
         '';
       };
     };

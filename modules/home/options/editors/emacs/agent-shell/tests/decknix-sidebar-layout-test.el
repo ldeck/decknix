@@ -1920,6 +1920,32 @@ unknown; work moving on its own is plain, so amber is only ever you."
       (should (equal (substring-no-properties row) " UK dev ✗? 1 PR · etl"))
       (should (eq (get-text-property (string-match "?" row) 'face row) 'shadow)))))
 
+(defun decknix-layout-test--mrpr (repo n delivery &optional verdict)
+  "An open WIP PR in REPO numbered N the hub marked ready to merge."
+  (list :repo repo :number n
+        :pr `((number . ,n) (state . "OPEN")
+              (merge_ready . ((verdict . ,(or verdict "clean")) (comments . 0)
+                              (delivery . ,delivery))))))
+
+(ert-deftest decknix-layout--an-approved-pr-no-session-took-waits-in-the-ship-queue ()
+  "Only the hub's undelivered merge-ready PRs queue; a sent one is the session's."
+  (let* ((prs (list (decknix-layout-test--mrpr "o/web" 1 "no-session")
+                    (decknix-layout-test--mrpr "o/api" 2 "no-receiver")
+                    (decknix-layout-test--mrpr "o/etl" 3 "sent")
+                    (decknix-layout-test--mrpr "o/svc" 4 "no-session" "comments")
+                    (decknix-layout-test--qpr "o/etl" 5 '(:kind gitops :region "UK" :state failed
+                                                         :next "uk-dev"))
+                    (list :repo "o/plain" :number 6 :pr '((number . 6) (state . "OPEN")))))
+         (q (decknix--layout-ship-queue prs #'decknix-layout-test--qlines)))
+    (should (equal (mapcar (lambda (g) (list (plist-get g :kind) (plist-get g :label)
+                                             (plist-get g :repos)))
+                           q)
+                   '((failed "UK dev" ("etl"))
+                     (merge "approved · comments to classify" ("svc"))
+                     (merge "approved · ready to merge" ("web" "api")))))
+    (should (equal (decknix--layout-ship-queue-text (nth 2 q) 80)
+                   " approved · ready to merge ✓ 2 PRs · web, api"))))
+
 (ert-deftest decknix-layout--a-stale-ship-says-how-old-its-data-is ()
   (should (equal (decknix--layout-ship-stale-note '(:state failed :stale "Kargo" :as-of 100.0)
                                                   (+ 100.0 7200))

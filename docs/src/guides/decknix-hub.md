@@ -79,6 +79,39 @@ cat ~/.config/decknix/hub/meta.json
 | `decknix.services.hub.github.wipInterval` | `60` | Seconds between WIP polls |
 | `decknix.services.hub.github.mergedRetentionDays` | `7` | Days a merged PR stays in the WIP feed (the 50 most recent merges); the sidebar drops it sooner once shipped |
 | `decknix.services.hub.github.reviewRepos` | `[]` | Repos to check (empty = all) |
+| `decknix.services.hub.github.mergeReadyNotify` | `false` | Tell the session that raised a PR when it is approved and ready to merge (see [Merge-ready notifications](#merge-ready-notifications)) |
+
+#### Merge-ready notifications
+
+For workflows that pre-authorise agent sessions to merge their own approved
+PRs, `mergeReadyNotify = true` makes the WIP adapter classify each open PR
+you authored after every poll. A PR is ready when it is approved on its
+current head (`review_stale` false), not a draft, CI is `pass`, `mergeable`
+is `MERGEABLE` and `merge_state` is `CLEAN` or `HAS_HOOKS`. It is then:
+
+- `clean`: no unresolved threads and no human reply since your last
+  activity. The owning session is sent: `PR <url> is approved and clean:
+  merge and ship it per the auto-merge policy`.
+- `comments`: N unresolved threads, plus one when a human replied (a
+  `BLOCKED` merge state is accepted here, since required thread resolution
+  blocks until they are handled). The session is sent: `PR <url> approved
+  with N comments: classify blocking vs follow-up per the policy, then ship`.
+
+The owner is any conversation that linked the PR (`linked_prs` in
+`agent-sessions.json`) or raised it (the created-PR store,
+`session-prs.eld`). Its sessions are tried newest first with
+`decknix session send <id> --when idle --reason merge-ready`, so the
+message lands when the session's turn ends. One message is sent per head
+commit and verdict; `merge-ready-state.json` in the hub directory keeps
+that across restarts. An undelivered one is retried every five minutes.
+
+The hub never merges. The session does, under the repo's own rules and its
+ship flow, and should re-check the live PR first: the WIP feed can be up to
+five minutes old. A ready PR no live session took (`delivery` other than
+`sent`) is listed in the sidebar [ship queue](../modules/ai/agent-shell/layouts/wip.md#ship-queue)
+as `approved · ready to merge` (or `approved · comments to classify`). No
+session is spawned for it: the hub has no session identity to sign a spawn
+with, and an automatic spawn would spend model credit on every approval.
 
 #### Jira projects
 
@@ -391,7 +424,8 @@ All state is stored in `~/.config/decknix/hub/`:
 | File | Content |
 |------|---------|
 | `github-reviews.json` | PR reviews needing your attention (per-PR attention signals — `my_review`, `others_reviewed`, `re_requested`, `comment_mentioned`, `review_stale`, `review_decision` — drive the sidebar's [reviewed filter](../modules/ai/agent-shell/layouts/requests.md#the-reviewed-filter-r)) |
-| `github-wip.json` | Your open PRs, and merged ones within `mergedRetentionDays`, with CI status and branches. `state` is upper case (`OPEN`, `MERGED`). `errors` lists queries that failed this poll without failing it |
+| `github-wip.json` | Your open PRs, and merged ones within `mergedRetentionDays`, with CI status and branches. `state` is upper case (`OPEN`, `MERGED`). `errors` lists queries that failed this poll without failing it. Each PR carries `author`, `head_sha` and `merge_state` (GitHub's `mergeStateStatus`), and with `mergeReadyNotify` a `merge_ready` object (`verdict`, `comments`, `delivery`: `sent`, `no-session`, `no-receiver` or `failed`, and `session` once sent) |
+| `merge-ready-state.json` | With `mergeReadyNotify`: which (head SHA, verdict) each open PR was already sent for, and the last undelivered attempt |
 | `jira-tasks.json` | Jira issues assigned to you and not Done (`items`), to pick up (`pick_up`), their true counts (`in_progress_total`, `pick_up_total`), the `projects` and `pick_up_projects` used, and `errors` |
 | `github-issues.json` | Open GitHub issues assigned to you |
 | `task-chores.json` | Pending Taskwarrior chores |

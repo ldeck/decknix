@@ -7,6 +7,7 @@
 mod chores;
 mod jira;
 mod kargo;
+mod merge_ready;
 mod quota;
 mod teamcity;
 
@@ -116,6 +117,10 @@ struct GitHubConfig {
     wip_merged_retention_days: u64,
     /// Seconds between polls of open issues assigned to me; 0 disables.
     issues_interval_secs: u64,
+    /// Tell the session that raised a PR when it becomes approved and
+    /// mergeable, and mark unclaimed ones for the sidebar ship queue.
+    /// Opt-in: it sends prompts into live sessions.
+    merge_ready_notify: bool,
 }
 
 impl Default for HubConfig {
@@ -147,6 +152,7 @@ impl Default for GitHubConfig {
             // at 30 days one author already had 94 merges.
             wip_merged_retention_days: 7,
             issues_interval_secs: 300,
+            merge_ready_notify: false,
         }
     }
 }
@@ -404,6 +410,16 @@ struct WipPr {
     approvers: Vec<String>, // distinct human logins whose latest review is APPROVED
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     blockers: Vec<String>, // distinct human logins whose latest review is CHANGES_REQUESTED
+    // The PR's own author.  `authors[0]' is always the viewer, so it cannot
+    // tell my PR from someone else's PR assigned to me.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    head_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    merge_state: Option<String>, // mergeStateStatus: CLEAN, BLOCKED, BEHIND, DIRTY, ...
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    merge_ready: Option<merge_ready::MergeReady>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -420,6 +436,9 @@ struct WipFile {
     /// Shown by the sidebar so a partial feed is never mistaken for a full one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     errors: Vec<String>,
+    /// GitHub login the feed was generated for, as on `ReviewsFile`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    viewer: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2162,6 +2181,8 @@ struct PrDetails {
     requested_reviewers: Vec<String>,
     approvers: Vec<String>,
     blockers: Vec<String>,
+    head_sha: Option<String>,
+    merge_state: Option<String>,
 }
 
 impl Default for PrDetails {
@@ -2175,6 +2196,7 @@ impl Default for PrDetails {
             merged_at: None, merge_commit: None,
             authors: Vec::new(), requested_reviewers: Vec::new(),
             approvers: Vec::new(), blockers: Vec::new(),
+            head_sha: None, merge_state: None,
         }
     }
 }
@@ -2249,7 +2271,6 @@ async fn fetch_pr_details(
         head_ref_name: Option<String>,
         status_check_rollup: Option<Vec<GhCheck>>,
         mergeable: Option<String>,
-        #[allow(dead_code)]
         merge_state_status: Option<String>,
         review_decision: Option<String>,
         comments: Option<Vec<GhComment>>,
@@ -2336,7 +2357,11 @@ async fn fetch_pr_details(
                 .map(collect_requested).unwrap_or_default();
             let (approvers, blockers) = d.latest_reviews.as_deref()
                 .map(partition_reviews).unwrap_or_default();
+            let head_sha = d.commits.as_ref()
+                .and_then(|cs| cs.last()).and_then(|c| c.oid.clone());
             PrDetails {
+                head_sha,
+                merge_state: d.merge_state_status,
                 branch: d.head_ref_name,
                 ci: summarise_ci(&d.status_check_rollup),
                 mergeable: d.mergeable,
@@ -2402,6 +2427,8 @@ struct GhMyPr {
     is_draft: Option<bool>,
     updated_at: Option<String>,
     repository: Option<GhRepo>,
+    #[serde(default)]
+    author: Option<GhAuthor>,
 }
 
 /// Fetch the current user's open + recently merged PRs across all repos.
@@ -2410,7 +2437,7 @@ struct GhMyPr {
 /// (deploy-gated cleanup); a merged row is hidden the moment it ships, so
 /// this window is only the safety cap for a merge that never deploys.
 async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
-    let json_fields = "number,title,url,state,isDraft,updatedAt,repository";
+    let json_fields = "number,title,url,state,isDraft,updatedAt,repository,author";
     let cutoff = merged_cutoff(Utc::now(), config.wip_merged_retention_days);
     let mut errors: Vec<String> = Vec::new();
 
@@ -2556,6 +2583,10 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
             requested_reviewers: details.requested_reviewers,
             approvers: details.approvers,
             blockers: details.blockers,
+            author: pr.author.as_ref().map(|a| a.login.clone()).filter(|l| !l.is_empty()),
+            head_sha: details.head_sha,
+            merge_state: details.merge_state,
+            merge_ready: None,
         });
     }
 
@@ -2565,6 +2596,7 @@ async fn poll_github_wip(config: &GitHubConfig) -> Result<WipFile, String> {
         updated: Utc::now(),
         repos,
         errors,
+        viewer: my_login,
     })
 }
 
@@ -2750,7 +2782,12 @@ async fn run_wip_adapter(
 ) {
     let interval = Duration::from_secs(config.wip_interval_secs);
     loop {
-        let result = poll_github_wip(&config).await;
+        let mut result = poll_github_wip(&config).await;
+        if config.merge_ready_notify {
+            if let Ok(data) = result.as_mut() {
+                merge_ready::run(data, &dir).await;
+            }
+        }
         let status = match &result {
             Ok(data) => {
                 if let Err(e) = atomic_write_json(&dir, "github-wip.json", data).await {
@@ -2844,6 +2881,7 @@ async fn main() {
                 review_repos: gh_cfg.review_repos.clone(),
                 wip_merged_retention_days: gh_cfg.wip_merged_retention_days,
                 issues_interval_secs: gh_cfg.issues_interval_secs,
+                merge_ready_notify: gh_cfg.merge_ready_notify,
             },
             dir.clone(),
             meta.clone(),
@@ -3002,9 +3040,9 @@ mod wip_query_tests {
 
     #[test]
     fn wip_file_omits_errors_when_empty_and_carries_them_otherwise() {
-        let ok = WipFile { updated: Utc::now(), repos: vec![], errors: vec![] };
+        let ok = WipFile { updated: Utc::now(), repos: vec![], errors: vec![], viewer: None };
         assert!(!serde_json::to_string(&ok).unwrap().contains("errors"));
-        let bad = WipFile { updated: Utc::now(), repos: vec![], errors: vec!["author merged: boom".into()] };
+        let bad = WipFile { updated: Utc::now(), repos: vec![], errors: vec!["author merged: boom".into()], viewer: None };
         assert!(serde_json::to_string(&bad).unwrap().contains("author merged: boom"));
     }
 }
