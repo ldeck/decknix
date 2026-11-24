@@ -3375,6 +3375,21 @@ in
       '';
     };
 
+    dispatch.spawnMaxLive = mkOption {
+      type = types.ints.positive;
+      default = 32;
+      example = 64;
+      description = ''
+        Counted lanes at or above which the agent dispatch receiver refuses
+        a `decknix session spawn` (`too-many-sessions`); sets
+        `decknix-agent-dispatch-spawn-max-live`. Lanes are sessions the
+        receiver spawned or resumed and sessions tagged `lane-<digits>`;
+        auto-review and human sessions never count. It is a runaway guard
+        alongside the 10 s spawn interval, not a scheduler: raise it when
+        coordinated fan-out needs more lanes.
+      '';
+    };
+
     dispatch.enableOnStart = mkOption {
       type = types.bool;
       default = true;
@@ -4305,6 +4320,8 @@ in
         ;; `armed_by: startup' at once.  Arming is the moment requests are
         ;; dated against: anything created earlier is refused
         ;; `predates-arming', so a restart never replays a stale request.
+        ;; Lane cap (`dispatch.spawnMaxLive'), set before the receiver arms.
+        (setq decknix-agent-dispatch-spawn-max-live ${toString cfg.dispatch.spawnMaxLive})
         ${optionalString cfg.dispatch.enableOnStart ''
         (declare-function decknix-agent-dispatch-enable-on-start "decknix-agent-dispatch")
         (decknix-agent-dispatch-enable-on-start)

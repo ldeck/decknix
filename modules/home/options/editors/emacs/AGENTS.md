@@ -1382,7 +1382,8 @@ Rules the code and tests pin (do not weaken):
   `decknix-agent-dispatch-live-tags-function`, the sidebar resolver) cover
   the request = outcome `existing`, no brief, nothing started; several =
   `ambiguous-existing`; an unconfirmed spawn for the same tags =
-  `spawn-in-progress`; then the cap (`-spawn-max-live`, 32 lanes:
+  `spawn-in-progress`; then the cap (`-spawn-max-live`, 32 lanes, set from
+  `dispatch.spawnMaxLive`:
   `decknix-agent-dispatch-counted-lanes` counts live sessions the receiver
   spawned or resumed, live sessions with a tag matching
   `-spawn-counted-tag-regexp` (default `lane-<digits>`) and unstarted
