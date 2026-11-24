@@ -1265,6 +1265,80 @@ See `decknix--layout-feed-warnings'."
     (setq line-num (1+ line-num)))
   line-num)
 
+(defvar decknix--layout-ship-queue-memo nil
+  "Cons of (INPUTS . GROUPS) from the last `decknix--layout-current-ship-queue'.")
+
+(defun decknix--layout-tree-prs (tree)
+  "Return every PR plist in WIP TREE once, sessions' first, then unattended."
+  (let (seen)
+    (dolist (row (plist-get tree :sessions))
+      (dolist (p (plist-get row :prs)) (unless (memq p seen) (push p seen))))
+    (dolist (p (plist-get (plist-get tree :dormant) :prs))
+      (unless (memq p seen) (push p seen)))
+    (nreverse seen)))
+
+(defun decknix--layout-current-ship-queue (tree)
+  "Return the ship queue for WIP TREE, memoised on the tree and Jira feed.
+Both are replaced, never mutated, when their data changes."
+  (let ((inputs (list tree (bound-and-true-p decknix--hub-jira-tasks))))
+    (if (and decknix--layout-ship-queue-memo
+             (cl-every #'eq inputs (car decknix--layout-ship-queue-memo)))
+        (cdr decknix--layout-ship-queue-memo)
+      (cdr (setq decknix--layout-ship-queue-memo
+                 (cons inputs (decknix--layout-ship-queue
+                               (decknix--layout-tree-prs tree)
+                               #'decknix--layout-pr-ship-lines)))))))
+
+(defconst decknix-sidebar-layout-ship-queue-faces
+  '((failed . (:foreground "#ff5f5f" :weight bold))
+    (ready  . (:foreground "#ffaf5f" :weight bold))
+    (close  . (:foreground "#ffaf5f")))
+  "Face per ship queue group: red failed, amber waiting on you.")
+
+(defun decknix--layout-jira-url (key)
+  "Return Jira issue KEY's URL from the hub's task feed, or nil."
+  (alist-get 'url (seq-find (lambda (i) (equal (alist-get 'key i) key))
+                            (alist-get 'items (bound-and-true-p decknix--hub-jira-tasks)))))
+
+(defun decknix--layout-render-ship-queue (line-num width groups)
+  "Insert the ship queue GROUPS under the WIP heading.  Returns LINE-NUM.
+
+What deploys want of you, in one place: failed stages, stages waiting for
+you to promote them, tickets to close.  Hidden when there are none.  RET
+or TAB on a group lists its PRs; RET on a ticket offers its actions."
+  (when groups
+    (let ((key "ship-queue"))
+      (insert (decknix--layout-wip-group-header "ship queue" (length groups) key " "
+                                                'font-lock-comment-face)
+              "\n")
+      (setq line-num (1+ line-num))
+      (unless (decknix--layout-collapsed-p key)
+        (dolist (g groups)
+          (let* ((gkey (concat "shipq:" (plist-get g :label)))
+                 (close (eq (plist-get g :kind) 'close))
+                 (ticket (and close (substring (plist-get g :label) (length "close "))))
+                 (open (decknix--layout-expanded-p gkey)))
+            (insert (apply #'propertize
+                           (concat "  " (decknix--layout-ship-queue-text g (- width 2)))
+                           'face (alist-get (plist-get g :kind) decknix-sidebar-layout-ship-queue-faces)
+                           'decknix-layout-ship-group g
+                           'help-echo (concat (mapconcat (lambda (p) (format "%s#%s" (plist-get p :repo)
+                                                                             (plist-get p :number)))
+                                                         (plist-get g :prs) "\n")
+                                              (if close "\nRET for the ticket's actions"
+                                                "\nRET or TAB to list them"))
+                           (if close
+                               (list 'decknix-hub-type 'task
+                                     'decknix-hub-jira-key ticket
+                                     'decknix-hub-url (decknix--layout-jira-url ticket))
+                             (list 'decknix-layout-expand-key gkey)))
+                    "\n")
+            (setq line-num (1+ line-num))
+            (when (and open (not close))
+              (dolist (pr (plist-get g :prs))
+                (setq line-num (decknix--layout-render-pr line-num width pr nil t)))))))))
+  line-num)
+
 (defun decknix--layout-render-wip (line-num width)
   "Render WIP: my live sessions with their own work nested beneath each.
 
@@ -1310,6 +1384,8 @@ lists its blocked sessions."
        'wip-sessions)
       (setq line-num (1+ line-num))
       (setq line-num (decknix--layout-render-feed-errors line-num width))
+      (setq line-num (decknix--layout-render-ship-queue
+                      line-num width (decknix--layout-current-ship-queue tree)))
       (let* ((rows (plist-get tree :sessions))
              (plan (decknix--layout-wip-plan
                     rows
@@ -1367,6 +1443,7 @@ or human-versus-bot readable without decoding.
 The title is truncated rather than allowed to push the glyphs out of the
 window, since the glyphs are the part worth keeping when space runs out."
   (let* ((raw (plist-get pr :pr))
+         (merged (plist-get pr :ship))
          (icons (concat (decknix--hub-author-icon raw)
                         (decknix--hub-primary-status-icon raw 'wip)
                         (decknix--hub-approved-icon raw)
@@ -1374,10 +1451,12 @@ window, since the glyphs are the part worth keeping when space runs out."
                         (decknix--hub-conflict-icon raw)
                         (decknix--hub-stale-approval-icon raw)
                         (decknix--hub-unresolved-icon raw)
-                        (decknix--hub-reply-icon raw)
+                        ;; A merged PR's threads are history: `↩' there
+                        ;; asked for a reply nobody owes any more.
+                        (if merged "" (decknix--hub-reply-icon raw))
                         (decknix--hub-discussion-icon raw)
                         (decknix--hub-activity-icons raw)))
-         (ship (plist-get pr :ship))
+         (ship merged)
          (shipped (eq (plist-get pr :visibility) 'shipped))
          ;; A merged PR's age says nothing; where it is in the pipeline is
          ;; the one thing left to know about it.
@@ -1516,8 +1595,9 @@ LINES are its ship lines when already computed.  Returns LINE-NUM."
 (defun decknix--layout-render-fold (line-num width fold lines key)
   "Insert FOLD, merged PRs sharing one stage, as one summary row.
 LINES are the first member's ship lines, the same for every member; KEY
-toggles the list of members, collapsed by default.  The shared next step
-is drawn once, beneath the summary.  Returns LINE-NUM."
+toggles the list of members, collapsed by default.  Only the state is
+shown: what to do about it is the ship queue's, at the top of WIP, and
+repeating it under every fold was most of the section.  Returns LINE-NUM."
   (let* ((prs (plist-get fold :prs))
          (open (decknix--layout-expanded-p key))
          (first (car prs))
@@ -1539,9 +1619,6 @@ is drawn once, beneath the summary.  Returns LINE-NUM."
                                            "\nTAB or RET to list them"))
             "\n")
     (setq line-num (1+ line-num))
-    (when (and decknix-sidebar-item-lines (plist-get lines :next))
-      (setq line-num (decknix--layout-insert-item-lines
-                      line-num width (list (cons 'next (plist-get lines :next))) "        ")))
     (when open
       (dolist (pr prs)
         (setq line-num (decknix--layout-render-pr line-num width pr lines t))))

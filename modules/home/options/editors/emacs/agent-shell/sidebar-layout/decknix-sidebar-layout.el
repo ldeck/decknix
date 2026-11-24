@@ -1706,14 +1706,12 @@ fourteen lines repeating one fact.  Folded, they are one row that expands."
             (nreverse order))))
 
 (defun decknix--layout-pr-flags (pr)
-  "Return the marks PR carries that its stage does not: `↩', `✗ci'.
-A merged PR still owing a reply or failing CI says something a neighbour
-at the same stage may not."
+  "Return the marks merged PR carries that its stage does not: `✗ci'.
+Failing CI says something a neighbour at the same stage may not.  An owed
+reply (`↩') is not one: once a PR has merged its threads are history, and
+marking every merged fold with it said nothing."
   (let ((raw (plist-get pr :pr)))
-    (string-join (delq nil (list (and (eq (alist-get 'needs_reply raw) t) "↩")
-                                 (and (equal (alist-get 'status (alist-get 'ci raw)) "fail")
-                                      "✗ci")))
-                 " ")))
+    (if (equal (alist-get 'status (alist-get 'ci raw)) "fail") "✗ci" "")))
 
 (defun decknix--layout-pr-fold-key (pr lines)
   "Return what PR shares with PRs it may fold with, or nil to keep its row.
@@ -1735,6 +1733,85 @@ to close is always its own row: it is the next thing to do."
   (let ((ranks (append (mapcar #'decknix--layout-pr-severity prs)
                        (mapcar #'decknix--layout-wt-severity worktrees))))
     (when ranks (apply #'min ranks))))
+
+;; --- ship queue ---------------------------------------------------------
+
+(defconst decknix-sidebar-layout-ship-queue-glyphs
+  '((failed . "✗") (ready . "⇢"))
+  "Glyph per ship queue group kind, as on the stage badges.")
+
+(defun decknix--layout-stage-rank (stage)
+  "Return how close STAGE is to production, high nearest."
+  (let ((s (downcase (or stage ""))))
+    (cond ((string-match-p "pr[o]?d" s) 3)
+          ((string-match-p "st[a]?g\\|stable" s) 2)
+          ((string-match-p "test" s) 1)
+          (t 0))))
+
+(defun decknix--layout-ship-queue (prs lines-of)
+  "Return the actionable ship groups among merged PRS, worst first.
+
+Each group is (:kind KIND :label LABEL :prs MEMBERS :repos NAMES):
+`failed' then `ready', one per region and stage, nearest production
+first; then `close', one per ticket left open.  A PR shipping several
+ways joins one group per shipper.  LINES-OF returns a PR's ship lines;
+their `close KEY' next step is the ticket.  Unknown, in-flight and done
+shippers ask nothing and are left out."
+  (let ((groups (make-hash-table :test 'equal)) order)
+    (cl-flet ((add (kind label pr)
+                (let* ((key (list kind label))
+                       (g (or (gethash key groups)
+                              (car (push (puthash key (list :kind kind :label label :prs nil :repos nil)
+                                                  groups)
+                                         order))))
+                       (repo (car (last (split-string (or (plist-get pr :repo) "") "/")))))
+                  (unless (memq pr (plist-get g :prs))
+                    (plist-put g :prs (append (plist-get g :prs) (list pr))))
+                  (unless (member repo (plist-get g :repos))
+                    (plist-put g :repos (append (plist-get g :repos) (list repo)))))))
+      (dolist (pr prs)
+        (let ((ship (plist-get pr :ship)))
+          (when ship
+            (dolist (s (or (plist-get ship :shippers) (list ship)))
+              (let ((state (plist-get s :state)) (region (plist-get s :region)))
+                (when (memq state '(failed ready))
+                  (add state
+                       (string-trim (concat region " "
+                                            (decknix-ship--display (plist-get s :next) region)))
+                       pr))))
+            (let ((next (plist-get (funcall lines-of pr) :next)))
+              (when (and next (string-prefix-p "close " next))
+                (add 'close next pr)))))))
+    (let ((kind-rank (lambda (g) (pcase (plist-get g :kind) ('failed 0) ('ready 1) (_ 2)))))
+      (sort (nreverse order)
+            (lambda (a b)
+              (let ((ka (funcall kind-rank a)) (kb (funcall kind-rank b)))
+                (if (/= ka kb) (< ka kb)
+                  (let ((ra (decknix--layout-stage-rank (plist-get a :label)))
+                        (rb (decknix--layout-stage-rank (plist-get b :label))))
+                    (if (/= ra rb) (> ra rb)
+                      (string< (plist-get a :label) (plist-get b :label)))))))))))
+
+(defun decknix--layout-ship-queue-text (group width)
+  "Return GROUP's one-line summary, naming as many repos as fit in WIDTH.
+`UK prd ⇢ 9 PRs · address-normaliser, staff-user-service, +2'."
+  (let* ((n (length (plist-get group :prs)))
+         (head (if (eq (plist-get group :kind) 'close)
+                   (format " %s" (plist-get group :label))
+                 (format " %s %s %d PR%s" (plist-get group :label)
+                         (alist-get (plist-get group :kind) decknix-sidebar-layout-ship-queue-glyphs)
+                         n (if (= n 1) "" "s"))))
+         (repos (plist-get group :repos))
+         (shown (length repos))
+         (text nil))
+    (while (and (null text) (>= shown 1))
+      (let* ((rest (- (length repos) shown))
+             (candidate (concat head " · " (string-join (seq-take repos shown) ", ")
+                                (if (> rest 0) (format ", +%d" rest) ""))))
+        (if (or (<= (string-width candidate) width) (= shown 1))
+            (setq text candidate)
+          (setq shown (1- shown)))))
+    (truncate-string-to-width (or text head) width nil nil "…")))
 
 ;; --- feed warnings -----------------------------------------------------
 

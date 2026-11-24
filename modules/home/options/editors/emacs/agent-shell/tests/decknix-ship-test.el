@@ -321,7 +321,7 @@
     (should (equal "UK⇢stg +1✓" (substring-no-properties (decknix-ship-label s))))
     (let ((lines (decknix-ship-lines s)))
       (should (equal (plist-get lines :current) "UK: ready to promote stg"))
-      (should (equal (plist-get lines :next) "UK: promote stg")))
+      (should-not (plist-get lines :next)))
     (should (= 1 (decknix-ship-severity s)))))
 
 (ert-deftest decknix-ship--a-region-keyed-or-single-region-entry-is-not-split ()
@@ -455,5 +455,15 @@
     (should (equal (plist-get lines :current) "no deploy needed"))
     (should-not (plist-get lines :next))
     (should (equal (substring-no-properties (decknix-ship-label s)) "✓none"))))
+
+;; --- no repetition --------------------------------------------------------
+
+(ert-deftest decknix-ship--ready-to-promote-is-not-followed-by-next-promote ()
+  "`UK: ready to promote prd' over `next: UK: promote prd' said it twice."
+  (let ((lines (decknix-ship-lines '(:kind gitops :region "UK" :state ready :current "uk-stg"
+                                     :next "uk-prd" :stages ("uk-dev" "uk-stg" "uk-prd")
+                                     :manual ("uk-prd")))))
+    (should (equal (plist-get lines :current) "UK: ready to promote prd"))
+    (should-not (plist-get lines :next))))
 
 ;;; decknix-ship-test.el ends here

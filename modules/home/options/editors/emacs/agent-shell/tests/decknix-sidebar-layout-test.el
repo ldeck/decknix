@@ -1807,17 +1807,70 @@ repos holding eight bot PRs awaiting review looked like nothing at all."
         (lines '(:current "US: deploying prd" :next nil)))
     (should (decknix--layout-pr-fold-key (list :ship ship :pr nil) lines))
     (should-not (decknix--layout-pr-fold-key (list :ship nil :pr nil) lines))
-    ;; Owing a reply or failing CI parts a PR from neighbours that do not,
-    ;; and folds it with neighbours that do.
+    ;; Failing CI parts a PR from neighbours that do not.  An owed reply
+    ;; does not: on a merged PR it is history, not a next step.
     (let ((plain (decknix--layout-pr-fold-key (list :ship ship :pr nil) lines))
           (reply (decknix--layout-pr-fold-key (list :ship ship :pr '((needs_reply . t))) lines))
           (ci (decknix--layout-pr-fold-key (list :ship ship :pr '((ci . ((status . "fail"))))) lines)))
-      (should-not (equal plain reply))
-      (should-not (equal plain ci))
-      (should (equal reply (decknix--layout-pr-fold-key
-                            (list :ship ship :pr '((needs_reply . t) (number . 2))) lines))))
+      (should (equal plain reply))
+      (should-not (equal plain ci)))
     (should-not (decknix--layout-pr-fold-key (list :ship ship :pr nil)
                                              '(:current "US: shipped" :next "close HX-1")))))
+
+;; --- ship queue ---------------------------------------------------------
+
+(defun decknix-layout-test--qpr (repo n ship &optional close)
+  "A merged WIP PR in REPO numbered N with SHIP; CLOSE is a key to close."
+  (list :repo repo :number n :pr `((number . ,n) (state . "MERGED"))
+        :ship ship :visibility (if (eq (plist-get ship :state) 'done) 'shipped 'shipping)
+        :test-close close))
+
+(defun decknix-layout-test--qlines (pr)
+  "Ship lines for a queue test PR: its next step is closing its key."
+  (list :next (and (plist-get pr :test-close) (concat "close " (plist-get pr :test-close)))))
+
+(defconst decknix-layout-test--uk-ready
+  '(:kind gitops :region "UK" :state ready :next "uk-prd" :stages ("uk-dev" "uk-stg" "uk-prd")))
+
+(ert-deftest decknix-layout--the-ship-queue-puts-failures-first-then-promotions-then-tickets ()
+  (let* ((prs (list (decknix-layout-test--qpr "o/address-normaliser" 1 decknix-layout-test--uk-ready)
+                    (decknix-layout-test--qpr "o/address-normaliser" 2 decknix-layout-test--uk-ready)
+                    (decknix-layout-test--qpr "o/staff-user-service" 3 decknix-layout-test--uk-ready)
+                    (decknix-layout-test--qpr "o/etl" 4 '(:kind gitops :region "UK" :state failed
+                                                         :next "uk-dev"))
+                    (decknix-layout-test--qpr "o/svc" 5 '(:kind gitops :state deploying :next "x"))
+                    (decknix-layout-test--qpr "o/svc" 6 '(:kind gitops :state unknown :region "UK"))
+                    (decknix-layout-test--qpr "o/mono" 7 '(:kind teamcity :state done
+                                                          :current "production")
+                                              "HX-1273")))
+         (q (decknix--layout-ship-queue prs #'decknix-layout-test--qlines)))
+    (should (equal (mapcar (lambda (g) (list (plist-get g :kind) (plist-get g :label)
+                                             (length (plist-get g :prs))))
+                           q)
+                   '((failed "UK dev" 1) (ready "UK prd" 3) (close "close HX-1273" 1))))
+    (should (equal (plist-get (nth 1 q) :repos) '("address-normaliser" "staff-user-service")))))
+
+(ert-deftest decknix-layout--a-pr-shipping-two-ways-joins-each-regions-group ()
+  (let* ((au '(:kind teamcity :region "AU" :state ready :next "production"))
+         (uk decknix-layout-test--uk-ready)
+         (pr (decknix-layout-test--qpr "o/mono" 1 (list :kind 'multi :state 'ready :shippers (list uk au))))
+         (q (decknix--layout-ship-queue (list pr) #'decknix-layout-test--qlines)))
+    (should (equal (mapcar (lambda (g) (plist-get g :label)) q) '("AU prd" "UK prd")))))
+
+(ert-deftest decknix-layout--a-queue-row-names-repos-until-they-no-longer-fit ()
+  (let ((g (list :kind 'ready :label "UK prd" :prs '(1 2 3 4 5 6 7 8 9)
+                 :repos '("address-normaliser" "external-user-service" "staff-user-service" "web"))))
+    (should (equal (decknix--layout-ship-queue-text g 200)
+                   " UK prd ⇢ 9 PRs · address-normaliser, external-user-service, staff-user-service, web"))
+    (let ((row (decknix--layout-ship-queue-text g 60)))
+      (should (<= (string-width row) 60))
+      (should (string-match-p "\\` UK prd ⇢ 9 PRs · address-normaliser, .*\\+[0-9]\\'" row)))
+    (should (equal (decknix--layout-ship-queue-text
+                    (list :kind 'failed :label "UK dev" :prs '(1) :repos '("etl")) 48)
+                   " UK dev ✗ 1 PR · etl"))
+    (should (equal (decknix--layout-ship-queue-text
+                    (list :kind 'close :label "close HX-1273" :prs '(1) :repos '("upside")) 48)
+                   " close HX-1273 · upside"))))
 
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here

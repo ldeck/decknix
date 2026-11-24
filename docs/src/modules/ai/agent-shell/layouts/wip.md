@@ -54,8 +54,7 @@ what comes next:
  ◐  hx-1610/fix-the-thing                working
       ▸ run the integration tests             ← amber: in progress
       next: open the PR                       ← dim blue
-    ■ ⇢prd #812 HX-1610 add the thing
-        next: promote us-prd                  ← a person promotes prd
+    ■ ⇢prd #812 HX-1610 add the thing     ← ready: the badge says promote
     ■ →prd #813 HX-1611 another thing
         ▸ verifying us-prd                    ← the badge alone reads as deploying
     ■ shipped #790 HX-1599 ...
@@ -70,25 +69,49 @@ ticket the hub still lists as not Done. A merged PR's current line is left
 out when it only restates the badge on its row; only `verifying` keeps it.
 The next line names what a person does: `deploy` a TeamCity environment,
 `promote` a Kargo stage, and nothing for a Kargo stage that promotes by
-itself. Red marks a failed stage, green a completed one.
+itself. A stage ready for you to promote has no next line: its `⇢` badge
+and `ready to promote prd` already say it. Red marks a failed stage, green
+a completed one.
 `decknix-sidebar-item-lines` turns them off.
 
 ### Merged PRs at one stage fold into one row
 
 Merged PRs under one session and repo at an identical stage, with the same
-next step and the same marks (`↩` owing a reply, `✗ci` failing CI), fold
-into one summary row, collapsed by default; `TAB` or `RET` lists them, and
-hovering names their numbers and every region's stage:
+marks (`✗ci` failing CI), fold into one summary row, collapsed by default;
+`TAB` or `RET` lists them, and hovering names their numbers and every
+region's stage. A fold shows only its state; what to do about it is in the
+ship queue:
 
 ```
-    ▸ 6 PRs ↩ · UK: merged, not deployed
-        next: UK: deploy prd
+    ▸ 6 PRs · UK: ready to promote prd
     ■ shipped #790 HX-1599 ...                ← its own row: a ticket to close
         next: close HX-1599
 ```
 
 A PR whose marks differ from its neighbours', or with a ticket to close,
-keeps its own row.
+keeps its own row. `↩` (a reply owed) is not shown on merged PRs or folds:
+once merged, a PR's threads are history.
+
+### Ship queue
+
+What deploys want of you, gathered from every merged PR in WIP (under a
+session or unattended), sits at the top of WIP, below the feed warnings,
+and is hidden when empty:
+
+```
+ ▾ ship queue (4)
+   UK dev ✗ 6 PRs · nct-etl-function                       ← red: failed
+   UK prd ⇢ 9 PRs · address-normaliser, staff-user-service, +2   ← amber
+   US stg ⇢ 1 PR · upside
+   close HX-1273 · upside                                   ← amber
+```
+
+Failed stages come first, then stages waiting for you to promote them,
+grouped by region and stage, nearest production first, then tickets to
+close. A PR shipping several ways joins one group per shipper. Each row
+names as many repos as fit, then `+N`. `RET` or `TAB` on a group lists its
+PRs; `RET` on a ticket offers the Jira actions. Stages that are unknown,
+in flight or done ask nothing and are left out.
 
 ## Merged PRs: kept until shipped
 

@@ -1152,26 +1152,42 @@ hides one silently; Reviews and WIP list only the board's sessions."
                     (decknix-lr-test--merged 4 decknix-lr-test--deploying)
                     (decknix-lr-test--merged 5 decknix-lr-test--deploying '((needs_reply . t)))))
          (out (decknix-lr-test--render-claim prs))
-         (pos (string-match "▸ 3 PRs · US: deploying prd" out)))
+         (pos (string-match "▸ 4 PRs · US: deploying prd" out)))
     (should pos)
     (should-not (string-match-p "#2 HX-2" out))
     ;; A ticket to close and an owed reply keep their own rows.
     (should (string-match-p "#3 HX-3" out))
     (should (string-match-p "next: close HX-3" out))
-    (should (string-match-p "#5 HX-5" out))
-    (should (string-match-p "#1 #2 #4" (get-text-property pos 'help-echo out)))
+    (should (string-match-p "#1 #2 #4 #5" (get-text-property pos 'help-echo out)))
+    (should-not (string-match-p "↩" out))
     ;; Two owing a reply fold together, marked, apart from the rest.
     (let ((replied (decknix-lr-test--render-claim
                     (list (decknix-lr-test--merged 6 decknix-lr-test--deploying '((needs_reply . t)))
                           (decknix-lr-test--merged 7 decknix-lr-test--deploying '((needs_reply . t)))
                           (decknix-lr-test--merged 8 decknix-lr-test--deploying)))))
-      (should (string-match-p "▸ 2 PRs ↩ · US: deploying prd" replied))
-      (should (string-match-p "#8 HX-8" replied)))
+      (should (string-match-p "▸ 3 PRs · US: deploying prd" replied))
+      (should-not (string-match-p "↩" replied)))
     ;; TAB or RET on the summary lists the members.
     (puthash (get-text-property pos 'decknix-layout-expand-key out) t decknix--layout-expanded)
     (let ((open (decknix-lr-test--render-claim prs)))
-      (should (string-match-p "▾ 3 PRs" open))
+      (should (string-match-p "▾ 4 PRs" open))
       (should (string-match-p "#2 HX-2" open)))))
+
+(ert-deftest decknix-layout-render--a-fold-shows-its-state-and-no-next-line ()
+  "The ship queue carries the action; a fold under a lane only says where."
+  (let* ((decknix--layout-expanded (make-hash-table :test 'equal))
+         (ready '(:kind gitops :region "UK" :state ready :current "uk-stg" :next "uk-prd"
+                  :stages ("uk-dev" "uk-stg" "uk-prd") :manual ("uk-prd")))
+         (out (decknix-lr-test--render-claim (list (decknix-lr-test--merged 1 ready)
+                                                   (decknix-lr-test--merged 2 ready)))))
+    (should (string-match-p "▸ 2 PRs · UK: ready to promote prd" out))
+    (should-not (string-match-p "next:" out))))
+
+(ert-deftest decknix-layout-render--a-merged-pr-owes-no-reply-marker ()
+  (let ((row (decknix--layout-pr-row (decknix-lr-test--merged 9 decknix-lr-test--deploying
+                                                              '((needs_reply . t)))
+                                     60)))
+    (should-not (string-match-p "↩" row))))
 
 (ert-deftest decknix-layout-render--a-multi-region-badge-is-compact-with-detail-in-help ()
   (let* ((us decknix-lr-test--deploying)

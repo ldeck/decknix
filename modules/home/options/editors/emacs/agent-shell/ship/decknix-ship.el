@@ -676,9 +676,11 @@ its region first and its stages without the region they repeat."
                                              (listp (plist-get status :manual)))
                                         (concat "in " current ", " next " follows"))
                                        (t (concat "in " current))))))
+          ;; `ready to promote prd' already says what to do, as does its ⇢
+          ;; badge; `next: promote prd' beneath it said it a third time.
           :next (pcase state
                   ('done close)
-                  ('unknown nil)
+                  ((or 'unknown 'ready) nil)
                   ('failed (funcall tag (concat "fix and redeploy " (or next ""))))
                   ((or 'deploying 'verifying) (funcall tag (funcall action raw-after)))
                   (_ (funcall tag (funcall action raw-next)))))))
