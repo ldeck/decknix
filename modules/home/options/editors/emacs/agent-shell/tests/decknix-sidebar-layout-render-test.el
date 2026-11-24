@@ -280,9 +280,27 @@ reduced to a count."
   (let ((out (decknix-lr-test--render-dormant
               (list :worktrees (list (list :branch "has-work" :dirty t
                                            :repo "exampleowner/feedx-integration"))))))
-    (should (string-match-p "no session" out))
+    (should (string-match-p "\\` ▾ unattended (1)" out))
+    (should-not (string-match-p "no session" out))
     (should (string-match-p "⇡ feedx-integration" out))
     (should (< (string-match "feedx-integration" out) (string-match "has-work" out)))))
+
+(ert-deftest decknix-layout-render--unattended-work-folds-under-its-heading ()
+  (let ((decknix--layout-expanded (make-hash-table :test 'equal))
+        (dormant (list :worktrees (list (list :branch "has-work" :dirty t :repo "o/r")))))
+    (puthash "wip-collapsed:unattended" t decknix--layout-expanded)
+    (let ((out (decknix-lr-test--render-dormant dormant)))
+      (should (string-match-p "\\` ▸ unattended (1)\n\\'" out)))))
+
+(ert-deftest decknix-layout-render--the-sidebar-has-no-line-number-gutter ()
+  "The gutter took four columns the rows were sized for: `rea', `wo'."
+  (with-temp-buffer
+    (setq-local display-line-numbers t)
+    (decknix-sidebar-layout-setup-buffer)
+    (should-not display-line-numbers)
+    (should truncate-lines))
+  (should (memq #'decknix-sidebar-layout-setup-buffer
+                (default-value 'agent-shell-workspace-sidebar-mode-hook))))
 
 (ert-deftest decknix-layout-render--a-review-worktree-row-names-its-pr ()
   (let ((out (decknix-lr-test--render-dormant
@@ -639,7 +657,22 @@ left the feed, and their repo folded into \"N more in flight\"."
     (let ((out (decknix-lr-test--render-wip
                 '(("*Claude: a*" nil nil "asking" nil nil)
                   ("*Claude: b*" nil nil "working" nil nil)))))
-      (should (string-match-p "WIP (2 — 1 need you" out)))))
+      (should (string-match-p "WIP (2 · 1 need you)" out)))))
+
+(ert-deftest decknix-layout-render--the-heading-counts-exactly-the-guessed-rows ()
+  "`2 inferred' in the heading sat above three `~' rows: it counted
+something else.  It now counts the rows marked `~', and says so."
+  (decknix-lr-test--with-buffers '("*Claude: coordinator/hx/us*" "*Claude: us/lane-01*"
+                                   "*Claude: us/lane-02*")
+    (let* ((out (decknix-lr-test--render-wip
+                 '(("*Claude: coordinator/hx/us*" ("coordinator" "hx" "us") nil "working" nil nil)
+                   ("*Claude: us/lane-01*" ("us" "lane-01") nil "asking" nil nil)
+                   ("*Claude: us/lane-02*" ("us" "lane-02") nil "ready" nil nil))))
+           (marked (seq-count (lambda (l) (string-match-p "\\`\\s-*~" l))
+                              (decknix-lr-test--lines out))))
+      (should (= marked 2))
+      (should (string-match-p "WIP (3 · 1 need you · 2 ~guessed)" out))
+      (should-not (string-match-p "inferred" out)))))
 
 (ert-deftest decknix-layout-render--a-flagged-session-is-flagged-in-wip ()
   "Flagged sessions were listed under Needs you; WIP now has to say so."

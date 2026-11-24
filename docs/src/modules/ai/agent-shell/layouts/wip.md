@@ -10,7 +10,7 @@ With the session-first layout (the default), WIP lists my live sessions with
 their PRs and worktrees nested under each, grouped like this:
 
 ```
- WIP (6 — 1 need you)
+ WIP (6 · 1 need you · 1 ~guessed)
  ▾ my-org (5)                         ← only when there are 2+ workspaces
  ●  coordinator/team/us    3 lanes ready
    ~ ⚑  us/lane-01                ask 1h  ← lane, placed by tags (~)
@@ -21,7 +21,7 @@ their PRs and worktrees nested under each, grouped like this:
  ●  docs/refresh                   ready
  ▾ tools (1)
  ●  dotfiles                       ready
- ◌  no session              4 unattended
+ ▾ unattended (4)                     ← work no live session is on
 ```
 
 - **Workspace** is the session's workspace directory, named by the matching
@@ -34,11 +34,18 @@ their PRs and worktrees nested under each, grouped like this:
   nowhere. Lanes are indented four columns under their coordinator; the `~`
   sits inside that indent, beside the glyph, so an inferred lane is nested
   as deep as a confirmed one.
+- **Heading**: sessions, how many need you, and how many rows below are
+  guesses: `~guessed` counts exactly the rows marked `~` (a lane placed by
+  tags, or a repo claimed from a session's name), `?pending` those marked `?`
+  (evidence not gathered yet). Both are read off the rendered rows.
+- **Unattended** work (dirty worktrees and PRs no live session is on) is the
+  last group, under its own `unattended (N)` heading; `TAB` folds it.
 - **Status** on the right is a compact word: `ask`, `wait`, `fail`, `upd`
   (blocked on you, with how long while it waits), `work`, `done` (finished,
   unread), `ready`, `close`. Its width is reserved, so a long name is
   truncated rather than the status clipped. Rows are fitted to the window's
-  text width, which excludes a line-number gutter.
+  text width; the sidebar turns line numbers off (it is in
+  `display-line-numbers-exempt-modes`), so no gutter takes their columns.
 - **Review sessions** are listed in Reviews, not here. The `0` toggle
   (`T` → Shared → wip reviews) adds them as a last `reviews` group per
   workspace.
@@ -195,7 +202,7 @@ with `status` one of `promoting`, `verified`, `failed` or `done`. The
 directory is watched, so a new record repaints the row at once. The retention is the `Y` toggle
 (`T` → Shared → shipped): 0, 10m, 20m, 30m, 1h, 2h, 1d or a typed duration,
 persisted with the other toggles (default 1d). A merged PR no session claims
-is listed under `no session` while it ships and counted as quiet once
+is listed under `unattended` while it ships and counted as quiet once
 shipped.
 
 If a hub WIP query fails (merged or assigned PRs), a `⚠ WIP feed partial`

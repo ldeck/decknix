@@ -7084,6 +7084,11 @@ duration -- the most important number on this branch."
               ;; the buffer was created would not.
               (unless (eq buffer-undo-list t)
                 (buffer-disable-undo))
+              ;; Same reasoning: a sidebar opened before the mode hook
+              ;; existed still has its line-number gutter.
+              (when (and display-line-numbers
+                         (fboundp 'decknix-sidebar-layout-setup-buffer))
+                (decknix-sidebar-layout-setup-buffer))
               (erase-buffer)
 
               ;; ── Sections other packages put above everything ──

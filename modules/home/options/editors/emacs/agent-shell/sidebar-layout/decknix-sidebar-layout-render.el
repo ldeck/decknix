@@ -187,6 +187,21 @@ for the wrong one and padded every row to it."
     ;; and its right-hand status was the part cut off.
     (if (window-live-p win) (window-max-chars-per-line win) (window-width))))
 
+(defun decknix-sidebar-layout-setup-buffer ()
+  "Give the sidebar buffer its whole window width for rows.
+Line numbers are off: under `global-display-line-numbers-mode' the gutter
+took four columns the rows had been sized for, so the right-hand status
+was clipped to `rea' and `wo'.  Lines never wrap."
+  (when (bound-and-true-p display-line-numbers-mode)
+    (display-line-numbers-mode -1))
+  (setq-local display-line-numbers nil)
+  (setq-local truncate-lines t))
+
+(add-hook 'agent-shell-workspace-sidebar-mode-hook #'decknix-sidebar-layout-setup-buffer)
+(with-eval-after-load 'display-line-numbers
+  (when (boundp 'display-line-numbers-exempt-modes)
+    (add-to-list 'display-line-numbers-exempt-modes 'agent-shell-workspace-sidebar-mode)))
+
 (declare-function decknix-board-focus-active-p "decknix-board-focus" ())
 (declare-function decknix-board-focus-title "decknix-board-focus" ())
 (declare-function decknix-board-focus-sessions "decknix-board-focus" (sessions))
@@ -1213,7 +1228,9 @@ collapsed team still lists any lane blocked on the user."
           ;; with the `~' in the first, a lane's glyph sat one column from
           ;; its coordinator's and the nesting did not read.
           (decknix--layout-indent-lines lstart (point) "    "
-                                        (if (eq (cdr lane) 'inferred) "   ~" "    ")))))
+                                        (if (eq (cdr lane) 'inferred)
+                                            (propertize "   ~" 'decknix-layout-guess 'inferred)
+                                          "    ")))))
     line-num))
 
 (defun decknix--layout-render-wip-workspace (line-num width ws raw-keys multi)
@@ -1365,60 +1382,89 @@ lists its blocked sessions."
          (tree (decknix--layout-wip-tree shown (decknix--layout-wip-repos)
                                          (decknix--layout-worktrees))))
     (when (or shown (decknix--layout-unattended-p (plist-get tree :dormant)))
-      (insert "\n")
-      (setq line-num (1+ line-num))
-      (decknix--sidebar-render-section-header
-       (let ((guessed (decknix--layout-inferred-count
-                       (plist-get tree :sessions))))
-         ;; Naming the guesses in the heading, because a wrong guess that
-         ;; renders like a fact is the defect every sidebar bug this week
-         ;; turned out to be.
-         (let ((need (seq-count (lambda (sess) (decknix--layout-attention-p (nth 3 sess)))
-                                wip)))
-           (concat (format "WIP (%d" (length wip))
-                   (if (> need 0) (format " — %d need you" need) "")
-                   (cond ((and (> guessed 0) (> need 0)) (format ", %d inferred" guessed))
-                         ((> guessed 0) (format " — %d inferred" guessed))
-                         (t ""))
-                   ")")))
-       'wip-sessions)
-      (setq line-num (1+ line-num))
-      (setq line-num (decknix--layout-render-feed-errors line-num width))
-      (setq line-num (decknix--layout-render-ship-queue
-                      line-num width (decknix--layout-current-ship-queue tree)))
-      (let* ((rows (plist-get tree :sessions))
-             (plan (decknix--layout-wip-plan
-                    rows
-                    (decknix--layout-controllers
-                     (mapcar (lambda (r) (plist-get r :session)) rows)
-                     (decknix--layout-dispatch-senders shown))
-                    #'decknix--layout-session-workspace-label))
-             (ordered (decknix--layout-plan-rows plan))
-             ;; Claims are de-duplicated in the order rows are drawn, so
-             ;; `shared ↑' always points at a row above it.
-             (dedup (make-hash-table :test 'eq))
-             (raw-keys (decknix--layout-raw-feed-keys)))
-        (cl-mapc (lambda (o d) (puthash o d dedup))
-                 ordered (decknix--layout-dedup-claims ordered))
-        (cl-flet ((swap (r) (gethash r dedup r)))
-          (setq plan
-                (mapcar (lambda (w)
-                          (list :label (plist-get w :label)
-                                :teams (mapcar (lambda (team)
-                                                 (list :row (swap (plist-get team :row))
-                                                       :lanes (mapcar (lambda (l)
-                                                                        (cons (swap (car l)) (cdr l)))
-                                                                      (plist-get team :lanes))))
-                                               (plist-get w :teams))
-                                :individuals (mapcar #'swap (plist-get w :individuals))
-                                :reviews (mapcar #'swap (plist-get w :reviews))))
-                        plan)))
-        (dolist (ws plan)
-          (setq line-num (decknix--layout-render-wip-workspace
-                          line-num width ws raw-keys (cdr plan)))))
-      (setq line-num (decknix--layout-render-dormant
-                      line-num width (plist-get tree :dormant)))))
+      ;; The body first, then the heading above it: the heading counts the
+      ;; rows the body actually marked as guesses.
+      (let ((top (point-marker))
+            (body-lines 0))
+        (let* ((rows (plist-get tree :sessions))
+               (plan (decknix--layout-wip-plan
+                      rows
+                      (decknix--layout-controllers
+                       (mapcar (lambda (r) (plist-get r :session)) rows)
+                       (decknix--layout-dispatch-senders shown))
+                      #'decknix--layout-session-workspace-label))
+               (ordered (decknix--layout-plan-rows plan))
+               ;; Claims are de-duplicated in the order rows are drawn, so
+               ;; `shared ↑' always points at a row above it.
+               (dedup (make-hash-table :test 'eq))
+               (raw-keys (decknix--layout-raw-feed-keys)))
+          (cl-mapc (lambda (o d) (puthash o d dedup))
+                   ordered (decknix--layout-dedup-claims ordered))
+          (cl-flet ((swap (r) (gethash r dedup r)))
+            (setq plan
+                  (mapcar (lambda (w)
+                            (list :label (plist-get w :label)
+                                  :teams (mapcar (lambda (team)
+                                                   (list :row (swap (plist-get team :row))
+                                                         :lanes (mapcar (lambda (l)
+                                                                          (cons (swap (car l)) (cdr l)))
+                                                                        (plist-get team :lanes))))
+                                                 (plist-get w :teams))
+                                  :individuals (mapcar #'swap (plist-get w :individuals))
+                                  :reviews (mapcar #'swap (plist-get w :reviews))))
+                          plan)))
+          (dolist (ws plan)
+            (setq body-lines (decknix--layout-render-wip-workspace
+                              body-lines width ws raw-keys (cdr plan)))))
+        (setq body-lines (decknix--layout-render-dormant
+                          body-lines width (plist-get tree :dormant)))
+        (let ((guesses (decknix--layout-count-guesses top (point)))
+              (end (point-marker)))
+          (goto-char top)
+          (insert "\n")
+          (decknix--sidebar-render-section-header
+           (decknix--layout-wip-heading
+            (length wip)
+            (seq-count (lambda (sess) (decknix--layout-attention-p (nth 3 sess))) wip)
+            (car guesses) (cdr guesses))
+           'wip-sessions)
+          (setq line-num (+ line-num 2))
+          (setq line-num (decknix--layout-render-feed-errors line-num width))
+          (setq line-num (decknix--layout-render-ship-queue
+                          line-num width (decknix--layout-current-ship-queue tree)))
+          (goto-char end)
+          (setq line-num (+ line-num body-lines))
+          (set-marker top nil)
+          (set-marker end nil)))))
   line-num)
+
+(defun decknix--layout-count-guesses (start end)
+  "Return (INFERRED . PENDING): rows from START to END marked `~' and `?'.
+A lane placed by its tags carries `decknix-layout-guess'; a repo claim
+carries its provenance.  Read off the rendered rows, so the heading
+cannot count anything the reader does not see."
+  (let ((inferred 0) (pending 0))
+    (save-excursion
+      (goto-char start)
+      (while (< (point) end)
+        (let ((bol (point)) (eol (line-end-position)))
+          (when (text-property-any bol eol 'decknix-layout-guess 'inferred)
+            (setq inferred (1+ inferred)))
+          (pcase (get-text-property bol 'decknix-layout-provenance)
+            ('inferred (setq inferred (1+ inferred)))
+            ('pending (setq pending (1+ pending)))))
+        (forward-line 1)))
+    (cons inferred pending)))
+
+(defun decknix--layout-wip-heading (sessions need inferred pending)
+  "Return the WIP heading: SESSIONS, those that NEED you, and guessed rows.
+`~guessed' counts the rows marked `~' (placed or claimed from a session's
+name or tags), `?pending' those marked `?' (evidence not gathered yet)."
+  (concat (format "WIP (%d" sessions)
+          (if (> need 0) (format " · %d need you" need) "")
+          (if (> inferred 0) (format " · %d ~guessed" inferred) "")
+          (if (> pending 0) (format " · %d ?pending" pending) "")
+          ")"))
 
 (defun decknix--layout-item-title (pr)
   "Return PR\='s title, falling back to its branch then its number.
@@ -1649,8 +1695,9 @@ lower-cased, the feed as GitHub spells it."
 Work no live session is on: dirty worktrees and open non-draft PRs.  It
 used to be a section of its own whose rows named a PR or branch with no
 repo beside them, which was reported as unrecognisable.  As a WIP group it
-takes WIP\='s structure: a `no session\' row standing where a session would,
-then one `⇡ repo\' row per repo coloured by its worst item, then the items.
+takes WIP\='s structure: an `unattended (N)\' group heading, collapsible
+like `individual\', then one `⇡ repo\' row per repo coloured by its worst
+item, then the items.
 
 Orphans and drafts are counted, not listed.  Live numbers when this was
 first built: 27 unattended worktrees and 7 PRs, of which 6 dirty and 4
@@ -1670,37 +1717,37 @@ branch is gone from origin\', whose remedy is a bulk prune."
          (held (- n (length prs) (length wts)))
          (claims (decknix--layout-group-claims wts prs)))
     (when (or (> n 0) (> orphans 0) (> quiet 0))
-      (let* ((left (format " %s  no session" (decknix-lifecycle-shape 'worktree-new)))
-             (right (if (> n 0) (format "%d unattended" n) "unattended"))
-             (pad (max 1 (- width (string-width left) (string-width right)))))
-        (insert (propertize (concat left (make-string pad ?\s) right)
-                            'face 'font-lock-comment-face
-                            'decknix-layout-unattended t)
-                "\n")
-        (setq line-num (1+ line-num)))
-      (dolist (claim claims)
-        (setq line-num (decknix--layout-render-claim-1
-                        line-num width claim nil 'observed)))
-      ;; Every tail is NAMED.  A section that drops rows silently reads as
-      ;; "that is all of it", which is the way this one already misled.
-      (when (> held 0)
-        (insert (propertize (format "    … %d more over the limit" held)
-                            'face 'font-lock-comment-face
-                            'help-echo "raise `unattended' in the sidebar transient")
-                "\n")
-        (setq line-num (1+ line-num)))
-      (when (> orphans 0)
-        (insert (propertize (format "    ⑂ %d orphaned, RET to prune" orphans)
-                            'face 'font-lock-comment-face
-                            'decknix-layout-orphan-prune t
-                            'help-echo "branch gone from origin -- RET opens the worktree picker")
-                "\n")
-        (setq line-num (1+ line-num)))
-      (when (> quiet 0)
-        (insert (propertize (format "    · %d quiet, nothing wanted" quiet)
-                            'face 'font-lock-comment-face)
-                "\n")
-        (setq line-num (1+ line-num)))))
+      ;; A group heading, like `individual': as a `◌ no session' row it
+      ;; stood where a session stands and read as one.
+      (insert (propertize (decknix--layout-wip-group-header "unattended" n "unattended" " "
+                                                            'font-lock-comment-face)
+                          'decknix-layout-unattended t)
+              "\n")
+      (setq line-num (1+ line-num))
+      (unless (decknix--layout-collapsed-p "unattended")
+        (dolist (claim claims)
+          (setq line-num (decknix--layout-render-claim-1
+                          line-num width claim nil 'observed)))
+        ;; Every tail is NAMED.  A section that drops rows silently reads as
+        ;; "that is all of it", which is the way this one already misled.
+        (when (> held 0)
+          (insert (propertize (format "    … %d more over the limit" held)
+                              'face 'font-lock-comment-face
+                              'help-echo "raise `unattended' in the sidebar transient")
+                  "\n")
+          (setq line-num (1+ line-num)))
+        (when (> orphans 0)
+          (insert (propertize (format "    ⑂ %d orphaned, RET to prune" orphans)
+                              'face 'font-lock-comment-face
+                              'decknix-layout-orphan-prune t
+                              'help-echo "branch gone from origin -- RET opens the worktree picker")
+                  "\n")
+          (setq line-num (1+ line-num)))
+        (when (> quiet 0)
+          (insert (propertize (format "    · %d quiet, nothing wanted" quiet)
+                              'face 'font-lock-comment-face)
+                  "\n")
+          (setq line-num (1+ line-num))))))
   line-num)
 
 (defun decknix--layout-render-tokens (line-num width)
