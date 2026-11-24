@@ -132,7 +132,8 @@ window, then drops. In place of its age the row shows the stage:
     ■ ·prd  #812 ...                       waiting for prd, which follows by itself (plain)
     ■ ✗test #812 ...                       failed at test (red)
     ■ merged #90 docs tweak                nothing to deploy (green)
-    ■ US?   #812 ...                       stage unknown: Kargo unreadable (grey)
+    ■ ✗stg? #812 ...                       failed at stg when Kargo was last read (grey ?)
+    ■ US?   #812 ...                       stage unknown: Kargo never read (grey)
     ■ shipped #77 ...                      shipped, dimmed until retention ends
 ```
 
@@ -210,9 +211,13 @@ If a hub WIP query fails (merged or assigned PRs), a `⚠ WIP feed partial`
 line under the heading names the first failure; hover for all of them. A
 deploy feed the hub cannot read gets one line of its own with the age of the
 data shown, `⚠ Kargo stale 2h · 6 repos · login expired, run kargo login
---sso` (or `TeamCity`), and the stages it covers read `?`, `stage unknown
-(Kargo unavailable)`, in grey: unknown, never `not deployed`. A stage that
-had already shipped before the feed went quiet stays shipped. A merge the
+--sso` (or `TeamCity`). A stage it last read keeps that state with a grey
+`?` after its badge, `✗stg?` or `⇢prd?`, and hovering says how old it is,
+`(Kargo data stale 2h)`: a stage that had failed or was waiting for you
+still wants you, so it stays in the ship queue, whose group gains the same
+`?`. A stage that had shipped stays shipped. Only a stage the hub has never
+read reads `?`, `stage unknown (Kargo unavailable)`, in grey: unknown,
+never `not deployed`. A merge the
 hub found changes no runtime file of its repo (see the hub guide's Kargo
 section) is done at once: `no deploy needed`, listed as `no deploy` for
 the shipped retention.

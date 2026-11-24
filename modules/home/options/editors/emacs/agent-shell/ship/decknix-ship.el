@@ -31,11 +31,15 @@
 ;; several shippers it updates the one whose stages name its stage.
 ;;
 ;; A feed that could not be read is never taken to mean "not deployed".
-;; The hub marks such data `stale' (carried from its last good poll, or
-;; unknown); a stale status short of done is `unknown', shown dim as
-;; "stage unknown (Kargo unavailable)", and never asks anything of the
-;; reader.  A stale status that had already shipped stays shipped: a stage
-;; does not un-deploy a merge because its feed went quiet.
+;; The hub marks such data `stale': carried from its last good poll, dated
+;; by `as_of', or never read at all.  A carried status keeps its state with
+;; `:stale' naming the feed and `:as-of' its age, and its badge gains a grey
+;; `?': a stage last seen failed or waiting for you still wants you, and
+;; hiding it behind "stage unknown" while a login was expired lost exactly
+;; the stages that mattered.  Only data never read is `unknown', shown dim
+;; as "stage unknown (Kargo unavailable)".  A stale status that had already
+;; shipped stays shipped: a stage does not un-deploy a merge because its
+;; feed went quiet.
 ;;
 ;; Everything is read from memory the hub watcher already parsed, so a
 ;; status costs alist lookups and a timestamp compare: no I/O, safe on the
@@ -193,11 +197,13 @@ PR had a shipper per region, and the feeds repeat the same few stamps.")
   (or (eq (alist-get 'stale (decknix-ship--teamcity-entry repo deploys)) t)
       (decknix-ship--feed-stale-p repo deploys)))
 
-(defun decknix-ship--unknown (status source)
-  "Return STATUS as `unknown' unless it is done; SOURCE names the feed."
-  (if (eq (plist-get status :state) 'done)
-      status
-    (append (list :state 'unknown :unknown-source source) status)))
+(defun decknix-ship--stale (status source as-of)
+  "Return STATUS from a feed SOURCE could not read this poll.
+AS-OF is when its data was last read, or nil when it never was: then
+STATUS is `unknown' unless done.  Otherwise it keeps its state, marked."
+  (cond ((eq (plist-get status :state) 'done) status)
+        (as-of (append (list :stale source :as-of as-of) status))
+        (t (append (list :state 'unknown :unknown-source source) status))))
 
 (defun decknix-ship--kargo-entries (repo number kargo)
   "Return KARGO's entries for REPO#NUMBER, one per region it ships to."
@@ -240,10 +246,12 @@ PR had a shipper per region, and the feeds repeat the same few stamps.")
 ;;             `deploying'  a promotion into :next is running
 ;;             `verifying'  :next holds the merge, its verification pending
 ;;             `failed'     :next failed to promote or verify
-;;             `unknown'    the deploy feed could not be read (stale)
+;;             `unknown'    the deploy feed has never been read (stale)
 ;;             `done'       every stage holds the merge
 ;;   :manual   stages a person promotes, or t when that is unknown
 ;;   :done-at  float time the last stage was verified, when `done'
+;;   :stale    the feed ("Kargo") this poll could not read; the state is
+;;             what it last read, at :as-of (float time)
 
 (defun decknix-ship--ordered (stages contains running failed)
   "Build a status from STAGES and the predicates CONTAINS, RUNNING, FAILED.
@@ -335,7 +343,9 @@ which `:manual' t records so the lines can say so."
                                            (or (decknix-ship--time (alist-get 'verified_at entry))
                                                (float-time))))
                        status)))
-      (if (eq (alist-get 'stale entry) t) (decknix-ship--unknown out "Kargo") out))))
+      (if (eq (alist-get 'stale entry) t)
+          (decknix-ship--stale out "Kargo" (decknix-ship--time (alist-get 'as_of entry)))
+        out))))
 
 (defun decknix-ship--kargo-missing (repo stages kargo)
   "Return the status of a merge KARGO has no entry for in REPO.
@@ -343,13 +353,15 @@ Pending while the feed reads REPO fine; unknown when it cannot."
   (let ((status (list :kind 'gitops :state 'pending :stages stages
                       :current nil :next (car stages))))
     (if (decknix-ship--feed-stale-p repo kargo)
-        (decknix-ship--unknown status "Kargo")
+        (decknix-ship--stale status "Kargo" nil)
       status)))
 
 (defun decknix-ship--teamcity-checked (status repo deploys)
-  "Return TeamCity STATUS for REPO, unknown when DEPLOYS could not read it."
+  "Return TeamCity STATUS for REPO, marked stale when DEPLOYS could not read it."
   (if (decknix-ship--teamcity-stale-p repo deploys)
-      (decknix-ship--unknown status "TeamCity")
+      (decknix-ship--stale status "TeamCity"
+                           (decknix-ship--time
+                            (alist-get 'as_of (decknix-ship--teamcity-entry repo deploys))))
     status))
 
 (defun decknix-ship--stage-region (stage)
@@ -586,7 +598,18 @@ green done, grey unknown, plain moving on its own.")
                      (t (concat (car cell)
                                 (if stage (decknix-ship--display stage region)
                                   (if (eq state 'done) "done" "deploy")))))))
-    (propertize (concat region text) 'face (cdr cell))))
+    (concat (propertize (concat region text) 'face (cdr cell))
+            (if (plist-get status :stale) (propertize "?" 'face 'shadow) ""))))
+
+(defun decknix-ship-stale (status)
+  "Return (SOURCE . AS-OF) when STATUS shows data a feed could not refresh.
+With several shippers, the oldest.  Nil when every shipper is current."
+  (let ((stale (seq-filter (lambda (s) (plist-get s :stale))
+                           (or (plist-get status :shippers) (list status)))))
+    (when stale
+      (let ((oldest (car (sort (copy-sequence stale)
+                               (lambda (a b) (< (plist-get a :as-of) (plist-get b :as-of)))))))
+        (cons (plist-get oldest :stale) (plist-get oldest :as-of))))))
 
 (defun decknix-ship-label (status)
   "Return the compact stage token for STATUS, propertized.
@@ -594,7 +617,8 @@ green done, grey unknown, plain moving on its own.")
   ✓prd    shipped (green)          →stg   deploying or verifying stg (plain)
   ✗test   failed at test (red)     ·dev   waiting for dev to follow (plain)
   ⇢prd    ready for you to promote merged  nothing to deploy (green)
-  ?       stage unknown: the deploy feed is unreadable (grey)
+  ?       stage unknown: the deploy feed has never been read (grey)
+  ✗stg?   as last read, but the feed is stale now (grey ?)
   ✓none   no deploy needed: the merge changes no runtime file (green)
 
 A PR with several shippers shows the furthest-behind one and how many

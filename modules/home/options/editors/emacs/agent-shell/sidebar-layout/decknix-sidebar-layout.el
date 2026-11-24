@@ -1764,15 +1764,17 @@ Each group is (:kind KIND :label LABEL :prs MEMBERS :repos NAMES):
 first; then `close', one per ticket left open.  A PR shipping several
 ways joins one group per shipper.  LINES-OF returns a PR's ship lines;
 their `close KEY' next step is the ticket.  Unknown, in-flight and done
-shippers ask nothing and are left out."
+shippers ask nothing and are left out.  A stale shipper, last read failed
+or ready, stays in, and marks its group `:stale' t."
   (let ((groups (make-hash-table :test 'equal)) order)
-    (cl-flet ((add (kind label pr)
+    (cl-flet ((add (kind label pr &optional stale)
                 (let* ((key (list kind label))
                        (g (or (gethash key groups)
                               (car (push (puthash key (list :kind kind :label label :prs nil :repos nil)
                                                   groups)
                                          order))))
                        (repo (car (last (split-string (or (plist-get pr :repo) "") "/")))))
+                  (when stale (plist-put g :stale t))
                   (unless (memq pr (plist-get g :prs))
                     (plist-put g :prs (append (plist-get g :prs) (list pr))))
                   (unless (member repo (plist-get g :repos))
@@ -1786,7 +1788,7 @@ shippers ask nothing and are left out."
                   (add state
                        (string-trim (concat region " "
                                             (decknix-ship--display (plist-get s :next) region)))
-                       pr))))
+                       pr (plist-get s :stale)))))
             (let ((next (plist-get (funcall lines-of pr) :next)))
               (when (and next (string-prefix-p "close " next))
                 (add 'close next pr)))))))
@@ -1806,8 +1808,9 @@ shippers ask nothing and are left out."
   (let* ((n (length (plist-get group :prs)))
          (head (if (eq (plist-get group :kind) 'close)
                    (format " %s" (plist-get group :label))
-                 (format " %s %s %d PR%s" (plist-get group :label)
+                 (format " %s %s%s %d PR%s" (plist-get group :label)
                          (alist-get (plist-get group :kind) decknix-sidebar-layout-ship-queue-glyphs)
+                         (if (plist-get group :stale) (propertize "?" 'face 'shadow) "")
                          n (if (= n 1) "" "s"))))
          (repos (plist-get group :repos))
          (shown (length repos))
@@ -1822,6 +1825,13 @@ shippers ask nothing and are left out."
     (truncate-string-to-width (or text head) width nil nil "…")))
 
 ;; --- feed warnings -----------------------------------------------------
+
+(defun decknix--layout-ship-stale-note (ship now)
+  "Return how old SHIP's stale deploy data is at NOW, or nil when current.
+`Kargo data stale 2h'."
+  (let ((stale (decknix-ship-stale ship)))
+    (and stale (format "%s data stale %s" (car stale)
+                       (decknix--layout-age-label (- now (cdr stale)))))))
 
 (defun decknix--layout-age-label (secs)
   "Return SECS as a compact age: now, 12m, 3h, 2d."

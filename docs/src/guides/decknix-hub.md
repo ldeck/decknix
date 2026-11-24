@@ -205,9 +205,12 @@ Without them every file counts except documentation (`docs/`, `specs/`,
 waiting for a deploy. The sidebar shows such a PR as done, `no deploy
 needed`, for the shipped retention, then drops it.
 
-In the sidebar a stale stage that had already shipped stays shipped; any
-other stale or missing stage reads `stage unknown (Kargo unavailable)` in
-grey, never `not deployed`, and asks nothing of you. One line under the WIP
+In the sidebar a stale entry with `as_of` keeps the state it was last read
+in, marked with a grey `?` (`✗stg?`, `⇢prd?`) and its age on hover, so a
+failed stage or one waiting for you to promote stays in the ship queue; a
+stage that had shipped stays shipped. A stale entry never read (no
+`as_of`) or a missing one reads `stage unknown (Kargo unavailable)` in grey,
+never `not deployed`, and asks nothing of you. One line under the WIP
 heading says how old the data is, e.g. `⚠ Kargo stale 2h · 6 repos · login
 expired, run kargo login --sso`; hover for every repo's error.
 

@@ -466,4 +466,55 @@
     (should (equal (plist-get lines :current) "UK: ready to promote prd"))
     (should-not (plist-get lines :next))))
 
+(ert-deftest decknix-ship--a-stale-known-failure-stays-failed-marked-stale ()
+  "Kargo going quiet must not hide a stage that had failed: it still wants you."
+  (let* ((kargo (decknix-ship-test--kargo-one
+                 '((region . "UK") (reached . ("uk-dev")) (failed . ("uk-stg"))
+                   (stale . t) (as_of . "2026-11-24T01:00:00Z"))))
+         (s (decknix-ship-status "o/svc" (decknix-ship-test--pr) '(()) kargo))
+         (label (decknix-ship-label s)))
+    (should (eq (plist-get s :state) 'failed))
+    (should (equal (plist-get s :stale) "Kargo"))
+    (should (= (plist-get s :as-of) (float-time (date-to-time "2026-11-24T01:00:00Z"))))
+    (should (equal (substring-no-properties label) "UK✗stg?"))
+    (should (eq (get-text-property (1- (length label)) 'face label) 'shadow))
+    (should (equal (plist-get (decknix-ship-lines s) :current) "UK: failed in stg"))
+    (should (= (decknix-ship-severity s) 0))))
+
+(ert-deftest decknix-ship--a-stale-known-ready-stage-stays-ready ()
+  (let* ((kargo (decknix-ship-test--kargo-one
+                 '((region . "UK") (reached . ("uk-dev" "uk-stg")) (manual . ("uk-prd"))
+                   (stale . t) (as_of . "2026-11-24T01:00:00Z"))))
+         (s (decknix-ship-status "o/svc" (decknix-ship-test--pr) '(()) kargo)))
+    (should (eq (plist-get s :state) 'ready))
+    (should (equal (substring-no-properties (decknix-ship-label s)) "UK⇢prd?"))
+    (should (= (decknix-ship-severity s) 1))))
+
+(ert-deftest decknix-ship--a-stale-known-stage-in-flight-keeps-its-stage ()
+  (let* ((kargo (decknix-ship-test--kargo-one
+                 '((region . "UK") (reached . ("uk-dev")) (promoting . ("uk-stg"))
+                   (stale . t) (as_of . "2026-11-24T01:00:00Z"))))
+         (s (decknix-ship-status "o/svc" (decknix-ship-test--pr) '(()) kargo)))
+    (should (eq (plist-get s :state) 'deploying))
+    (should (equal (substring-no-properties (decknix-ship-label s)) "UK→stg?"))))
+
+(ert-deftest decknix-ship--a-stale-teamcity-failure-it-had-read-stays-failed ()
+  (let* ((deploys `((repos . (((repo . "o/mono") (stale . t) (as_of . "2026-11-24T01:00:00Z")
+                               (branches . (((branch . "__default__")
+                                             (environments . (,(decknix-ship-test--env
+                                                                "development" "FAILURE"
+                                                                "2026-11-19T02:00:00Z")))))))))))
+         (s (decknix-ship-status "o/mono" (decknix-ship-test--pr) deploys '(()))))
+    (should (eq (plist-get s :state) 'failed))
+    (should (equal (decknix-ship-stale s)
+                   (cons "TeamCity" (float-time (date-to-time "2026-11-24T01:00:00Z")))))))
+
+(ert-deftest decknix-ship--stale-names-the-oldest-stale-shipper ()
+  (let ((s (list :kind 'multi :state 'failed
+                 :shippers (list '(:state failed :stale "Kargo" :as-of 200.0)
+                                 '(:state ready :stale "TeamCity" :as-of 100.0)
+                                 '(:state done)))))
+    (should (equal (decknix-ship-stale s) '("TeamCity" . 100.0)))
+    (should-not (decknix-ship-stale '(:state failed)))))
+
 ;;; decknix-ship-test.el ends here

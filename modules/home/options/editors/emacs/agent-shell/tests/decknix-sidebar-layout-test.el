@@ -1895,5 +1895,27 @@ unknown; work moving on its own is plain, so amber is only ever you."
                     (list :kind 'close :label "close HX-1273" :prs '(1) :repos '("upside")) 48)
                    " close HX-1273 · upside"))))
 
+(ert-deftest decknix-layout--the-ship-queue-keeps-stale-failures-and-promotions-marked ()
+  "A stale feed still lists what was last known to want you, with a `?'."
+  (let* ((stale-ready (append '(:stale "Kargo" :as-of 100.0) decknix-layout-test--uk-ready))
+         (prs (list (decknix-layout-test--qpr "o/etl" 1 '(:kind gitops :region "UK" :state failed
+                                                         :next "uk-dev" :stale "Kargo" :as-of 50.0))
+                    (decknix-layout-test--qpr "o/web" 2 stale-ready)
+                    (decknix-layout-test--qpr "o/api" 3 decknix-layout-test--uk-ready)))
+         (q (decknix--layout-ship-queue prs #'decknix-layout-test--qlines)))
+    (should (equal (mapcar (lambda (g) (list (plist-get g :kind) (plist-get g :label)
+                                             (length (plist-get g :prs)) (plist-get g :stale)))
+                           q)
+                   '((failed "UK dev" 1 t) (ready "UK prd" 2 t))))
+    (let ((row (decknix--layout-ship-queue-text (car q) 48)))
+      (should (equal (substring-no-properties row) " UK dev ✗? 1 PR · etl"))
+      (should (eq (get-text-property (string-match "?" row) 'face row) 'shadow)))))
+
+(ert-deftest decknix-layout--a-stale-ship-says-how-old-its-data-is ()
+  (should (equal (decknix--layout-ship-stale-note '(:state failed :stale "Kargo" :as-of 100.0)
+                                                  (+ 100.0 7200))
+                 "Kargo data stale 2h"))
+  (should-not (decknix--layout-ship-stale-note '(:state failed) 100.0)))
+
 (provide 'decknix-sidebar-layout-test)
 ;;; decknix-sidebar-layout-test.el ends here

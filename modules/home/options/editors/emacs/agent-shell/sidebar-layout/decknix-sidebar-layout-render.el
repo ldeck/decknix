@@ -1335,14 +1335,24 @@ or TAB on a group lists its PRs; RET on a ticket offers its actions."
           (let* ((gkey (concat "shipq:" (plist-get g :label)))
                  (close (eq (plist-get g :kind) 'close))
                  (ticket (and close (substring (plist-get g :label) (length "close "))))
-                 (open (decknix--layout-expanded-p gkey)))
+                 (open (decknix--layout-expanded-p gkey))
+                 (now (float-time))
+                 (text (concat "  " (decknix--layout-ship-queue-text g (- width 2)))))
+            ;; Appended, so the stale `?' keeps its grey under the group's colour.
+            (add-face-text-property 0 (length text)
+                                    (alist-get (plist-get g :kind) decknix-sidebar-layout-ship-queue-faces)
+                                    t text)
             (insert (apply #'propertize
-                           (concat "  " (decknix--layout-ship-queue-text g (- width 2)))
-                           'face (alist-get (plist-get g :kind) decknix-sidebar-layout-ship-queue-faces)
+                           text
                            'decknix-layout-ship-group g
-                           'help-echo (concat (mapconcat (lambda (p) (format "%s#%s" (plist-get p :repo)
-                                                                             (plist-get p :number)))
-                                                         (plist-get g :prs) "\n")
+                           'help-echo (concat (mapconcat
+                                               (lambda (p)
+                                                 (let ((note (decknix--layout-ship-stale-note
+                                                              (plist-get p :ship) now)))
+                                                   (format "%s#%s%s" (plist-get p :repo)
+                                                           (plist-get p :number)
+                                                           (if note (format " (%s)" note) ""))))
+                                               (plist-get g :prs) "\n")
                                               (if close "\nRET for the ticket's actions"
                                                 "\nRET or TAB to list them"))
                            (if close
@@ -1526,6 +1536,9 @@ window, since the glyphs are the part worth keeping when space runs out."
     (if ship
         (propertize row 'help-echo (concat (substring-no-properties
                                             (decknix-ship-label-full ship))
+                                           (let ((note (decknix--layout-ship-stale-note
+                                                        ship (float-time))))
+                                             (if note (format " (%s)" note) ""))
                                            "\n" (alist-get 'title raw "")))
       row)))
 
@@ -1663,6 +1676,9 @@ repeating it under every fold was most of the section.  Returns LINE-NUM."
                                                       prs " ")
                                            "\n" (substring-no-properties
                                                   (decknix-ship-label-full (plist-get first :ship)))
+                                           (let ((note (decknix--layout-ship-stale-note
+                                                        (plist-get first :ship) (float-time))))
+                                             (if note (format " (%s)" note) ""))
                                            "\nTAB or RET to list them"))
             "\n")
     (setq line-num (1+ line-num))
@@ -1813,7 +1829,8 @@ costs no network; an absent file renders nothing rather than a guess."
      ("→" "deploying or verifying")
      ("·" "waiting for a stage that follows by itself")
      ("✗" "failed")
-     ("?" "stage unknown: the deploy feed is unreadable")
+     ("?" "stage unknown: the deploy feed has never been read")
+     ("✗stg?" "as last read; the feed is stale now (hover for its age)")
      ("✓none" "no deploy needed: the merge changes no runtime file"))
     ("Groups and repos"
      ("⇡" "a repo a session is working in")
