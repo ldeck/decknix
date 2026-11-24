@@ -60,15 +60,17 @@ paused on a question was drawn exactly like one producing output, with
 only a colour between them.  The flag is already what a Reviews group
 shows when one of its sessions is blocked on you.")
 
-(defconst decknix-attention-color "#c678dd"
+(defconst decknix-attention-color "#ffaf5f"
   "Foreground for anything blocked on the user.
 
-Purple because it borrows no other meaning: red already says broken, amber
-in progress, green done.  The sidebar, the Requests indicator and the
-Reviews group rows used three different colours for this one state, so
-none of them could be read without knowing which screen it was.")
+The amber of a PR row waiting on you (`decknix-sidebar-layout-severity-faces'
+rank 1), because it is the same meaning: something wants you.  It had been
+a purple of its own, which made one sidebar say `waiting on you' in two
+colours.  `decknix-attention-glyph' tells a session from a PR row.  The
+sidebar, the Requests indicator and the Reviews group rows once used three
+different colours for this one state; they all share this one.")
 
-(defconst decknix-attention-background "#3a1f45"
+(defconst decknix-attention-background "#4a3416"
   "Background tint, a dark `decknix-attention-color', for tab-bar tabs.")
 
 (defface decknix-attention-face

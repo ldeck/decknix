@@ -1327,8 +1327,9 @@ One meaning per colour across repo headers, rows, folds and the ship
 queue: red failed or blocked, amber waiting on you, green shipped or
 done, grey quiet or unknown.  Work in flight is plain: it had been a
 yellow barely distinguishable from the amber that asks something of
-you.  A session blocked on you keeps `decknix-attention-face' (purple),
-shared with the tabs.")
+you.  A session blocked on you uses `decknix-attention-face', the same
+amber (`decknix-attention-color'), shared with the tabs; its `⚑' glyph is
+what tells it from a PR row.")
 
 (defun decknix--layout-severity-face (rank)
   "Return the face for severity RANK."

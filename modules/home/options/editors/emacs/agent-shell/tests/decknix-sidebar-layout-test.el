@@ -297,10 +297,19 @@ means the same KIND of thing."
   (should (equal "◌" (decknix--layout-state-glyph "closing")))
   (should (equal "·" (decknix--layout-state-glyph nil))))
 
+(ert-deftest decknix-layout--a-session-blocked-on-you-is-the-amber-of-a-pr-waiting-on-you ()
+  "One colour for `waiting on you', whether a session or a PR asks; the
+glyph, not the colour, says which."
+  (should (equal decknix-attention-color
+                 (plist-get (alist-get 1 decknix-sidebar-layout-severity-faces) :foreground)))
+  (should (equal decknix-attention-color
+                 (face-attribute 'decknix-attention-face :foreground)))
+  (should-not (member decknix-attention-glyph
+                      (mapcar #'cdr decknix-sidebar-layout-ship-queue-glyphs))))
+
 (ert-deftest decknix-layout--colour-separates-the-in-flight-states ()
-  "An agent mid-task and one paused on a question are both half circles,
-so the colour has to carry the difference: yellow moving, purple waiting
-on a person."
+  "An agent mid-task and one paused on a question: plain moving, amber
+waiting on a person."
   (should-not (equal (decknix--layout-state-face "working")
                      (decknix--layout-state-face "asking"))))
 

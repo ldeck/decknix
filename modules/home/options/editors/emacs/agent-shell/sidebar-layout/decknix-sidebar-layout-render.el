@@ -1795,11 +1795,10 @@ costs no network; an absent file renders nothing rather than a guess."
 (defconst decknix-sidebar-legend
   '(("Colours"
      ("red" "failed or blocked: a stage failed, a conflict, changes requested")
-     ("amber" "waiting on you: promote, reply, review, close a ticket")
+     ("amber" "waiting on you: promote, reply, review, close a ticket; a ⚑ session")
      ("green" "shipped, done, approved")
      ("grey" "quiet or unknown: nothing wanted, a guess, an unreadable feed")
-     ("plain" "moving on its own: an agent working, a deploy rolling")
-     ("purple" "a session blocked on you (tabs and Requests share it)"))
+     ("plain" "moving on its own: an agent working, a deploy rolling"))
     ("Sessions"
      ("⚑" "blocked on you: asking, waiting, failed, flagged")
      ("◐" "working")

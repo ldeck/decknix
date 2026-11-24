@@ -36,14 +36,14 @@ queue and Tasks rows share one scale:
 | Colour | Means | Examples |
 |--------|-------|----------|
 | red | failed or blocked | `✗dev`, a conflict `!`, changes requested |
-| amber | waiting on you | `⇢prd`, PRs awaiting your review, `close HX-1` |
+| amber | waiting on you | `⇢prd`, PRs awaiting your review, `close HX-1`, a `⚑` session blocked on you (tabs and Requests too) |
 | green | shipped, done, approved | `✓prd`, `✓none`, `✓` approved |
 | grey | quiet or unknown | `?` stage unknown, guessed `~` rows, shipped PRs |
 | plain | moving on its own | `→stg`, a working session `◐` |
-| purple | a session blocked on you | `⚑` rows; shared with tabs and Requests |
 
 Amber is never "in progress": work moving on its own is plain, so an
-amber row always wants something from you. `L` in the sidebar (or `L`
+amber row always wants something from you, whether a PR or a session asks;
+the `⚑` glyph is what marks a session. `L` in the sidebar (or `L`
 in the `?` menu) shows every glyph and colour with its meaning
 (`decknix-sidebar-legend`).
 

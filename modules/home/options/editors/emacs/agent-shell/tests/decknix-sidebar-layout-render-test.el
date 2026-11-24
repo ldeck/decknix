@@ -307,8 +307,10 @@ reduced to a count."
     (dolist (g '("Ω" "π" "◐" "●" "■" "✓" "⊖" "↻" "!" "◆N" "↩" "‥N" "i" "β" "." "@" "~"
                  "⇢" "→" "·" "✗" "?" "⚑" "⑂" "⇡" "✓none"))
       (should (string-match-p (concat "^ *" (regexp-quote g) " ") text)))
-    (dolist (c '("red" "amber" "green" "grey" "plain" "purple"))
-      (should (string-match-p c text)))))
+    (dolist (c '("red" "amber" "green" "grey" "plain"))
+      (should (string-match-p c text)))
+    (should (string-match-p "^ *amber .*⚑" text))
+    (should-not (string-match-p "^ *purple " text))))
 
 (ert-deftest decknix-layout-render--a-review-worktree-row-names-its-pr ()
   (let ((out (decknix-lr-test--render-dormant

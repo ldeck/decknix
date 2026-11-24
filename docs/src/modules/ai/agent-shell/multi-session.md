@@ -95,8 +95,9 @@ AS:2/5    ← 2 sessions need you (netfail / waiting / asking), 5 need you or ar
 ```
 
 Click it to choose one. Those three states share one look everywhere: the
-`⚑` glyph and `decknix-attention-face` (purple) in the sidebar, on Requests
-rows and Reviews group rows, and the same purple as a tab-bar tint.
+`⚑` glyph and `decknix-attention-face` (amber, the colour of a PR row
+waiting on you) in the sidebar, on Requests rows and Reviews group rows,
+and a dark amber tab-bar tint.
 
 `C-c j` (`C-c A j` globally) jumps to the next session that needs you, by
 decknix's own session states: `netfail`, then `waiting`, then `asking`, the
