@@ -176,7 +176,12 @@ is listed under `no session` while it ships and counted as quiet once
 shipped.
 
 If a hub WIP query fails (merged or assigned PRs), a `⚠ WIP feed partial`
-line under the heading names the first failure; hover for all of them.
+line under the heading names the first failure; hover for all of them. A
+deploy feed the hub cannot read gets one line of its own with the age of the
+data shown, `⚠ Kargo stale 2h · 6 repos · login expired, run kargo login
+--sso` (or `TeamCity`), and the stages it covers read `?`, `stage unknown
+(Kargo unavailable)`, in grey: unknown, never `not deployed`. A stage that
+had already shipped before the feed went quiet stays shipped.
 
 The rest of this page describes the PR-centric WIP of the previous layout.
 

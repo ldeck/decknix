@@ -1736,6 +1736,59 @@ to close is always its own row: it is the next thing to do."
                        (mapcar #'decknix--layout-wt-severity worktrees))))
     (when ranks (apply #'min ranks))))
 
+;; --- feed warnings -----------------------------------------------------
+
+(defun decknix--layout-age-label (secs)
+  "Return SECS as a compact age: now, 12m, 3h, 2d."
+  (cond ((null secs) "?")
+        ((>= secs 86400) (format "%dd" (truncate secs 86400)))
+        ((>= secs 3600) (format "%dh" (truncate secs 3600)))
+        ((>= secs 60) (format "%dm" (truncate secs 60)))
+        (t "now")))
+
+(defun decknix--layout-iso-secs (iso)
+  "Return ISO as a float time, or nil."
+  (and (stringp iso) (ignore-errors (float-time (date-to-time iso)))))
+
+(defun decknix--layout-stale-warning (name feed now)
+  "Return (TEXT . HELP) for the deploy FEED called NAME, or nil when healthy.
+One line however many repos fail: how old the data shown is (or how long
+it has been failing, when there was never good data), how many repos, and
+the first error without its raw detail, which HELP keeps."
+  (let ((stale (alist-get 'stale feed))
+        (errors (alist-get 'errors feed)))
+    (cond
+     (stale
+      (let* ((ok (delq nil (mapcar (lambda (s) (decknix--layout-iso-secs (alist-get 'last_ok s)))
+                                   stale)))
+             (since (delq nil (mapcar (lambda (s) (decknix--layout-iso-secs (alist-get 'since s)))
+                                      stale)))
+             (age (cond (ok (concat "stale " (decknix--layout-age-label (- now (apply #'min ok)))))
+                        (since (concat "failing " (decknix--layout-age-label
+                                                   (- now (apply #'min since)))))
+                        (t "stale")))
+             (who (if (cdr stale) (format "%d repos" (length stale))
+                    (alist-get 'repo (car stale))))
+             (why (replace-regexp-in-string " (.*)\\'" "" (or (alist-get 'error (car stale)) ""))))
+        (cons (format "⚠ %s %s · %s · %s" name age who why)
+              (mapconcat (lambda (s) (format "%s: %s" (alist-get 'repo s) (alist-get 'error s)))
+                         stale "\n"))))
+     (errors
+      (cons (format "⚠ %s partial: %s" name (car errors)) (string-join errors "\n"))))))
+
+(defun decknix--layout-feed-warnings (wip kargo deploys now)
+  "Return (TEXT . HELP) per hub feed that is partial or stale, at NOW.
+WIP, KARGO and DEPLOYS are the parsed github-wip.json, kargo-stages.json
+and teamcity-deploys.json.  A partial feed that looks complete is how
+merged PRs went missing unnoticed, and a stale deploy feed is why every
+merge once read `not deployed'."
+  (delq nil
+        (list (let ((errs (alist-get 'errors wip)))
+                (and errs (cons (format "⚠ WIP feed partial: %s" (car errs))
+                                (string-join errs "\n"))))
+              (decknix--layout-stale-warning "Kargo" kargo now)
+              (decknix--layout-stale-warning "TeamCity" deploys now))))
+
 ;; --- labels -----------------------------------------------------------
 
 (defconst decknix-sidebar-layout-state-glyphs

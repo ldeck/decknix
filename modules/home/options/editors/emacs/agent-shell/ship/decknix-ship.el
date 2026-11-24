@@ -30,6 +30,13 @@
 ;; stronger signal than either deploy feed and wins over both.  With
 ;; several shippers it updates the one whose stages name its stage.
 ;;
+;; A feed that could not be read is never taken to mean "not deployed".
+;; The hub marks such data `stale' (carried from its last good poll, or
+;; unknown); a stale status short of done is `unknown', shown dim as
+;; "stage unknown (Kargo unavailable)", and never asks anything of the
+;; reader.  A stale status that had already shipped stays shipped: a stage
+;; does not un-deploy a merge because its feed went quiet.
+;;
 ;; Everything is read from memory the hub watcher already parsed, so a
 ;; status costs alist lookups and a timestamp compare: no I/O, safe on the
 ;; paint path.  The sidebar memoises statuses per PR object as well.
@@ -165,14 +172,32 @@ PR had a shipper per region, and the feeds repeat the same few stamps.")
   (let ((case-fold-search t))
     (cdr (seq-find (lambda (cell) (string-match-p (car cell) (or repo ""))) alist))))
 
+(defun decknix-ship--teamcity-entry (repo deploys)
+  "Return REPO's entry in DEPLOYS, or nil."
+  (seq-find (lambda (r) (string-equal-ignore-case (or (alist-get 'repo r) "") (or repo "")))
+            (alist-get 'repos deploys)))
+
 (defun decknix-ship--teamcity-envs (repo deploys)
   "Return REPO's default-branch environments in DEPLOYS, or nil."
-  (let* ((entry (seq-find (lambda (r) (string-equal-ignore-case
-                                       (or (alist-get 'repo r) "") (or repo "")))
-                          (alist-get 'repos deploys)))
-         (branch (seq-find (lambda (b) (equal (alist-get 'branch b) "__default__"))
-                           (alist-get 'branches entry))))
+  (let ((branch (seq-find (lambda (b) (equal (alist-get 'branch b) "__default__"))
+                          (alist-get 'branches (decknix-ship--teamcity-entry repo deploys)))))
     (alist-get 'environments branch)))
+
+(defun decknix-ship--feed-stale-p (repo feed)
+  "Return non-nil when FEED (a parsed hub file) lists REPO as unreadable."
+  (seq-some (lambda (s) (string-equal-ignore-case (or (alist-get 'repo s) "") (or repo "")))
+            (alist-get 'stale feed)))
+
+(defun decknix-ship--teamcity-stale-p (repo deploys)
+  "Return non-nil when DEPLOYS' data for REPO is not from the latest poll."
+  (or (eq (alist-get 'stale (decknix-ship--teamcity-entry repo deploys)) t)
+      (decknix-ship--feed-stale-p repo deploys)))
+
+(defun decknix-ship--unknown (status source)
+  "Return STATUS as `unknown' unless it is done; SOURCE names the feed."
+  (if (eq (plist-get status :state) 'done)
+      status
+    (append (list :state 'unknown :unknown-source source) status)))
 
 (defun decknix-ship--kargo-entries (repo number kargo)
   "Return KARGO's entries for REPO#NUMBER, one per region it ships to."
@@ -215,6 +240,7 @@ PR had a shipper per region, and the feeds repeat the same few stamps.")
 ;;             `deploying'  a promotion into :next is running
 ;;             `verifying'  :next holds the merge, its verification pending
 ;;             `failed'     :next failed to promote or verify
+;;             `unknown'    the deploy feed could not be read (stale)
 ;;             `done'       every stage holds the merge
 ;;   :manual   stages a person promotes, or t when that is unknown
 ;;   :done-at  float time the last stage was verified, when `done'
@@ -296,13 +322,29 @@ which `:manual' t records so the lines can say so."
                  (cond ((member next (alist-get 'verifying entry)) 'verifying)
                        ((and (listp manual) (member next manual)) 'ready)
                        (t 'pending))))
-    (append (list :kind 'gitops
-                  :region (alist-get 'region entry)
-                  :manual manual
-                  :done-at (and (eq (plist-get status :state) 'done)
-                                (or (decknix-ship--time (alist-get 'verified_at entry))
-                                    (float-time))))
-            status)))
+    (let ((out (append (list :kind 'gitops
+                             :region (alist-get 'region entry)
+                             :manual manual
+                             :done-at (and (eq (plist-get status :state) 'done)
+                                           (or (decknix-ship--time (alist-get 'verified_at entry))
+                                               (float-time))))
+                       status)))
+      (if (eq (alist-get 'stale entry) t) (decknix-ship--unknown out "Kargo") out))))
+
+(defun decknix-ship--kargo-missing (repo stages kargo)
+  "Return the status of a merge KARGO has no entry for in REPO.
+Pending while the feed reads REPO fine; unknown when it cannot."
+  (let ((status (list :kind 'gitops :state 'pending :stages stages
+                      :current nil :next (car stages))))
+    (if (decknix-ship--feed-stale-p repo kargo)
+        (decknix-ship--unknown status "Kargo")
+      status)))
+
+(defun decknix-ship--teamcity-checked (status repo deploys)
+  "Return TeamCity STATUS for REPO, unknown when DEPLOYS could not read it."
+  (if (decknix-ship--teamcity-stale-p repo deploys)
+      (decknix-ship--unknown status "TeamCity")
+    status))
 
 (defun decknix-ship--stage-region (stage)
   "Return the region prefix of STAGE (`uk' of `uk-stg'), or nil."
@@ -370,15 +412,16 @@ and its `status' (`verified', `promoting', `failed', `done')."
     (decknix-ship--regioned
      (pcase (plist-get shipper :kind)
        ('teamcity
-        (decknix-ship-teamcity-status (alist-get 'merged_at pr)
-                                      (decknix-ship--teamcity-envs repo deploys)
-                                      stages (and stages (last stages))))
+        (decknix-ship--teamcity-checked
+         (decknix-ship-teamcity-status (alist-get 'merged_at pr)
+                                       (decknix-ship--teamcity-envs repo deploys)
+                                       stages (and stages (last stages)))
+         repo deploys))
        ('gitops
         (let ((entry (decknix-ship--kargo-entry repo (alist-get 'number pr) kargo region)))
           (if entry
               (decknix-ship-kargo-status entry)
-            (list :kind 'gitops :state 'pending :stages stages
-                  :current nil :next (car stages)))))
+            (decknix-ship--kargo-missing repo stages kargo))))
        (_ (list :kind 'none :state 'done :stages nil :current nil :next nil
                 :done-at (decknix-ship--time (alist-get 'merged_at pr)))))
      region)))
@@ -389,13 +432,14 @@ One per regional Kargo entry for `gitops', else a single status."
   (let ((merged-at (alist-get 'merged_at pr)))
     (pcase kind
       ('teamcity
-       (list (decknix-ship-teamcity-status merged-at
-                                           (decknix-ship--teamcity-envs repo deploys))))
+       (list (decknix-ship--teamcity-checked
+              (decknix-ship-teamcity-status merged-at (decknix-ship--teamcity-envs repo deploys))
+              repo deploys)))
       ('gitops
        (or (mapcar #'decknix-ship-kargo-status
                    (mapcan #'decknix-ship-split-regions
                            (decknix-ship--kargo-entries repo (alist-get 'number pr) kargo)))
-           (list (list :kind 'gitops :state 'pending :stages nil :current nil :next nil))))
+           (list (decknix-ship--kargo-missing repo nil kargo))))
       ('ci
        (let ((ci (alist-get 'status (alist-get 'ci pr))))
          (list (list :kind 'ci :stages '("ci")
@@ -429,12 +473,15 @@ several it replaces the one whose stages name its stage, if any."
                 statuses)))))
 
 (defun decknix-ship--behind-rank (status)
-  "Return how far behind STATUS is: -1 failed, else the share of stages done."
+  "Return how far behind STATUS is: -1 failed, else the share of stages done.
+An unknown status ranks just ahead of done, so a shipper whose feed is
+unreadable never stands in front of one that is known to want something."
   (let ((stages (plist-get status :stages))
         (current (plist-get status :current)))
     (pcase (plist-get status :state)
       ('failed -1.0)
       ('done 1.0)
+      ('unknown 0.999)
       (_ (if (and stages current (member current stages))
              (/ (float (1+ (seq-position stages current))) (1+ (length stages)))
            0.0)))))
@@ -513,7 +560,8 @@ treated as shipped just now, so it is seen at least once."
     (ready     . ("⇢" . (:foreground "#ffaf5f" :weight bold)))
     (deploying . ("→" . (:foreground "#d7af5f")))
     (verifying . ("→" . (:foreground "#d7af5f")))
-    (pending   . ("·" . (:foreground "#d7af5f"))))
+    (pending   . ("·" . (:foreground "#d7af5f")))
+    (unknown   . ("?" . shadow)))
   "Glyph and face per ship state.")
 
 (defun decknix-ship--token (status)
@@ -526,6 +574,7 @@ treated as shipped just now, so it is seen at least once."
          (stage (if (eq state 'done) (plist-get status :current) (plist-get status :next)))
          (text (cond ((and (eq state 'done) (eq kind 'ci)) "✓ci")
                      ((and (eq state 'done) (eq kind 'none)) "merged")
+                     ((eq state 'unknown) "?")
                      (t (concat (car cell)
                                 (if stage (decknix-ship--display stage region)
                                   (if (eq state 'done) "done" "deploy")))))))
@@ -537,6 +586,7 @@ treated as shipped just now, so it is seen at least once."
   ✓prd    shipped (green)          →stg   deploying or verifying stg (amber)
   ✗test   failed at test (red)     ·dev   waiting for dev (amber)
   ⇢prd    ready for you to promote merged  nothing to deploy (green)
+  ?       stage unknown: the deploy feed is unreadable (grey)
 
 A PR with several shippers shows the furthest-behind one and how many
 others are done: `US→prd +2✓'.  Every shipper's token is in
@@ -563,7 +613,7 @@ pushed the title out of a 48-column sidebar."
   (pcase (plist-get status :state)
     ('failed 0)
     ('ready 1)
-    ('done 4)
+    ((or 'done 'unknown) 4)
     (_ 2)))
 
 (defun decknix-ship-ticket-key (pr)
@@ -609,6 +659,8 @@ its region first and its stages without the region they repeat."
                               ('deploying (concat "deploying " (or next "")))
                               ('verifying (concat "verifying " (or next "")))
                               ('ready (concat "ready to promote " (or next "")))
+                              ('unknown (format "stage unknown (%s unavailable)"
+                                                (or (plist-get status :unknown-source) "deploy feed")))
                               (_ (cond ((null current) "merged, not deployed")
                                        ((and (eq (plist-get status :kind) 'gitops)
                                              (listp (plist-get status :manual)))
@@ -616,6 +668,7 @@ its region first and its stages without the region they repeat."
                                        (t (concat "in " current))))))
           :next (pcase state
                   ('done close)
+                  ('unknown nil)
                   ('failed (funcall tag (concat "fix and redeploy " (or next ""))))
                   ((or 'deploying 'verifying) (funcall tag (funcall action raw-after)))
                   (_ (funcall tag (funcall action raw-next)))))))

@@ -155,8 +155,29 @@ When freight bundles images from several repos, the revision comes from the
 image whose `org.opencontainers.image.source` names the repo.
 
 The `kargo` CLI must be logged in for the user the daemon runs as
-(`kargo login`); otherwise `kargo-stages.json` carries the error and the
-sidebar shows those PRs as pending with a `WIP feed partial: kargo: ...` line.
+(`kargo login --sso`). Its SSO token lasts about a day and the CLI renews it
+silently; when that renewal fails every call fails with `error refreshing
+token ... please use kargo login to re-authenticate`.
+
+A poll that cannot read a repo never writes over what the last good poll
+said about it. Each of that repo's PR entries is carried forward with
+`stale: true` (and `as_of`, when it was read), and the repo is listed under
+the file's `stale` key with the error, when the failures began (`since`)
+and when it last succeeded (`last_ok`). Failures are classified: an expired
+login is not retried and ends the poll's remaining `kargo` calls; a timeout
+or connection error is retried twice, after 2s and 8s; a GitHub compare
+GitHub could not answer (as opposed to one it answered 404 or 422) also
+keeps the previous entry. TeamCity deploys follow the same rule:
+`teamcity-deploys.json` carries the last good repo entry with `stale: true`
+when a deploy query fails for a reason other than a missing build
+configuration (404), and lists the repo under `stale`. The log line for each
+poll names the first error.
+
+In the sidebar a stale stage that had already shipped stays shipped; any
+other stale or missing stage reads `stage unknown (Kargo unavailable)` in
+grey, never `not deployed`, and asks nothing of you. One line under the WIP
+heading says how old the data is, e.g. `⚠ Kargo stale 2h · 6 repos · login
+expired, run kargo login --sso`; hover for every repo's error.
 
 #### Jira
 

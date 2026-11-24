@@ -247,6 +247,7 @@ PR those filters exist to hide."
 (defvar decknix--hub-wip)
 (defvar decknix--hub-jira-tasks)
 (defvar decknix--hub-kargo-stages)
+(defvar decknix--hub-deploys)
 (defvar decknix--hub-token-quotas)
 (defvar decknix--agent-provider-id)
 
@@ -1250,22 +1251,19 @@ MULTI non-nil means several workspaces, so this one gets a header."
     line-num))
 
 (defun decknix--layout-render-feed-errors (line-num width)
-  "Insert one line naming the hub WIP feed's failed queries, if any.
-Returns LINE-NUM.  A partial feed that looks complete is how merged PRs went
-missing unnoticed: the merged query failed on every poll for months."
-  (let ((errs (append
-               (alist-get 'errors (and (boundp 'decknix--hub-wip) decknix--hub-wip))
-               (mapcar (lambda (e) (concat "kargo: " e))
-                       (alist-get 'errors (and (boundp 'decknix--hub-kargo-stages)
-                                               decknix--hub-kargo-stages))))))
-    (if (null errs)
-        line-num
-      (insert (propertize (truncate-string-to-width
-                           (format "  ⚠ WIP feed partial: %s" (car errs)) width nil nil "…")
-                          'face 'warning
-                          'help-echo (string-join errs "\n"))
-              "\n")
-      (1+ line-num))))
+  "Insert one line per hub feed that is partial or stale.  Returns LINE-NUM.
+See `decknix--layout-feed-warnings'."
+  (dolist (w (decknix--layout-feed-warnings
+              (bound-and-true-p decknix--hub-wip)
+              (bound-and-true-p decknix--hub-kargo-stages)
+              (bound-and-true-p decknix--hub-deploys)
+              (float-time)))
+    (insert (propertize (truncate-string-to-width (concat "  " (car w)) width nil nil "…")
+                        'face 'warning
+                        'help-echo (cdr w))
+            "\n")
+    (setq line-num (1+ line-num)))
+  line-num)
 
 (defun decknix--layout-render-wip (line-num width)
   "Render WIP: my live sessions with their own work nested beneath each.

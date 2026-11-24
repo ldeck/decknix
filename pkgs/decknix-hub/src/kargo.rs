@@ -21,9 +21,18 @@
 // promotion policies; the others are listed as `manual`, so the sidebar can
 // say a merge is ready for a person to promote rather than in progress.
 //
-// Writes kargo-stages.json.  A missing or unauthenticated `kargo` degrades to
-// an `errors` entry; the repo list is still written so the sidebar knows
-// those repos ship through Kargo and shows their merges as pending.
+// Writes kargo-stages.json.  A poll that cannot read a repo's stages never
+// overwrites what the last good poll said about it: each of that repo's PR
+// entries is carried forward from the previous file with `stale` set, and
+// the repo is listed under `stale` with the error, when it started failing
+// and when it last succeeded.  Writing empty `reached` lists instead made
+// every merge read "merged, not deployed" for the length of a Kargo login
+// expiry, PRs that had reached production included.
+//
+// Failures are classified.  An expired login (the CLI's silent token
+// refresh fails, then every call fails the same way) is not retried and
+// stops the poll's remaining calls; a timeout or connection error is
+// retried with backoff.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -39,6 +48,9 @@ use tokio::sync::RwLock;
 use crate::{atomic_write_json, update_meta, AdapterStatus, SharedMeta};
 
 const KARGO_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Pauses before each retry of a transient `kargo` failure.
+pub const KARGO_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(8)];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -90,9 +102,24 @@ pub struct KargoStagesFile {
     pub prs: Vec<KargoPr>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+    /// Repos whose stages this poll could not read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stale: Vec<KargoStale>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+/// A repo whose Kargo data is the last good poll's, not this one's.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KargoStale {
+    pub repo: String,
+    pub error: String,
+    /// When the failures began.
+    pub since: DateTime<Utc>,
+    /// When a poll last read this repo's stages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ok: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KargoPr {
     pub repo: String,
     pub number: u64,
@@ -118,6 +145,13 @@ pub struct KargoPr {
     /// When the last stage verified the freight holding the merge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified_at: Option<String>,
+    /// The stage lists are not this poll's: carried from the last good poll,
+    /// or unknown when there was none.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stale: bool,
+    /// When the stage lists were read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<DateTime<Utc>>,
 }
 
 /// What one Kargo stage says about its current freight.
@@ -304,6 +338,8 @@ where
         manual,
         failed,
         verified_at: if all { verified_at } else { None },
+        stale: false,
+        as_of: None,
     }
 }
 
@@ -330,13 +366,76 @@ async fn revision_contains(repo: &str, merge: &str, revision: &str) -> Option<bo
         return Some(*hit);
     }
     let path = format!("repos/{repo}/compare/{merge}...{revision}");
-    let out = crate::gh_json(&["api", &path, "--jq", ".status"]).await.ok()?;
-    let answer = compare_contains(out.trim())?;
+    let answer = match crate::gh_json(&["api", &path, "--jq", ".status"]).await {
+        Ok(out) => compare_contains(out.trim())?,
+        Err(e) => compare_error_answer(&e)?,
+    };
     contains_cache().write().await.insert(key, answer);
     Some(answer)
 }
 
-async fn kargo_json(args: &[String]) -> Result<Value, String> {
+/// What a failed compare call says about containment: GitHub answering
+/// 404 or 422 means the revision is not this repo's (freight can carry
+/// another repo's image), which is a definite no; anything else (timeout,
+/// network, auth) is unknown, so the PR's entry must not be rebuilt from it.
+pub fn compare_error_answer(error: &str) -> Option<bool> {
+    (error.contains("HTTP 404") || error.contains("HTTP 422")).then_some(false)
+}
+
+/// Why a `kargo` call failed, which decides whether retrying can help.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum KargoFailure {
+    /// The login expired or was refused; every call fails until `kargo login`.
+    Auth,
+    /// A timeout or connection problem worth retrying.
+    Transient,
+    Other,
+}
+
+pub fn classify_failure(message: &str) -> KargoFailure {
+    let m = message.to_ascii_lowercase();
+    const AUTH: [&str; 6] = ["re-authenticate", "refreshing token", "unauthenticated",
+                             "token is expired", "401", "kargo login"];
+    const TRANSIENT: [&str; 10] = ["timed out", "timeout", "deadline exceeded", "connection refused",
+                                   "connection reset", "no such host", "unavailable", "502",
+                                   "503", "eof"];
+    if AUTH.iter().any(|k| m.contains(k)) {
+        KargoFailure::Auth
+    } else if TRANSIENT.iter().any(|k| m.contains(k)) {
+        KargoFailure::Transient
+    } else {
+        KargoFailure::Other
+    }
+}
+
+/// The error recorded for a failed call: an expired login says what to run.
+pub fn failure_message(kind: KargoFailure, raw: &str) -> String {
+    match kind {
+        KargoFailure::Auth => format!("login expired, run `kargo login --sso` ({})",
+                                      raw.chars().take(120).collect::<String>()),
+        _ => raw.to_string(),
+    }
+}
+
+/// Run `kargo ARGS`, retrying a transient failure after each of
+/// `KARGO_RETRY_DELAYS`.  The error names its kind.
+async fn kargo_json(args: &[String]) -> Result<Value, (KargoFailure, String)> {
+    let mut delays = KARGO_RETRY_DELAYS.iter();
+    loop {
+        match kargo_json_once(args).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let kind = classify_failure(&e);
+                match (kind, delays.next()) {
+                    (KargoFailure::Transient, Some(d)) => tokio::time::sleep(*d).await,
+                    _ => return Err((kind, failure_message(kind, &e))),
+                }
+            }
+        }
+    }
+}
+
+async fn kargo_json_once(args: &[String]) -> Result<Value, String> {
     let child = Command::new("kargo")
         .args(args)
         .stdout(Stdio::piped())
@@ -355,11 +454,56 @@ async fn kargo_json(args: &[String]) -> Result<Value, String> {
     serde_json::from_slice(&out.stdout).map_err(|e| format!("kargo json: {e}"))
 }
 
-/// My merged PRs with a merge commit, from the WIP adapter's output.
-fn merged_prs(dir: &Path) -> Vec<(String, u64, String)> {
-    let Ok(text) = std::fs::read_to_string(dir.join("github-wip.json")) else { return Vec::new() };
-    let Ok(v) = serde_json::from_str::<Value>(&text) else { return Vec::new() };
-    merged_prs_from(&v)
+/// My merged PRs with a merge commit, from the WIP adapter's output; None
+/// when that output cannot be read, which is not the same as no PRs.
+fn merged_prs(dir: &Path) -> Option<Vec<(String, u64, String)>> {
+    let text = std::fs::read_to_string(dir.join("github-wip.json")).ok()?;
+    let v = serde_json::from_str::<Value>(&text).ok()?;
+    Some(merged_prs_from(&v))
+}
+
+/// The previous poll's file, the fallback for whatever this poll cannot read.
+pub fn read_previous(dir: &Path) -> Option<KargoStagesFile> {
+    serde_json::from_str(&std::fs::read_to_string(dir.join("kargo-stages.json")).ok()?).ok()
+}
+
+/// FRESH, a PR entry this poll built, or the stale stand-in for it when
+/// TRUSTED is false: the previous poll's entry for the same PR and region,
+/// else FRESH with no stage reached.  Either way it is marked stale, and
+/// keeps the time the stand-in was read.
+pub fn settle_entry(fresh: KargoPr, trusted: bool, previous: Option<&KargoStagesFile>,
+                    now: DateTime<Utc>) -> KargoPr {
+    if trusted {
+        return KargoPr { stale: false, as_of: Some(now), ..fresh };
+    }
+    let prior = previous.and_then(|p| p.prs.iter().find(|e| {
+        e.repo.eq_ignore_ascii_case(&fresh.repo) && e.number == fresh.number && e.region == fresh.region
+    }));
+    match prior {
+        Some(e) => KargoPr { stale: true, ..e.clone() },
+        None => KargoPr { reached: Vec::new(), promoting: Vec::new(), verifying: Vec::new(),
+                          failed: Vec::new(), verified_at: None, stale: true, as_of: None, ..fresh },
+    }
+}
+
+/// The `stale` list for repos FAILED (repo -> error) this poll, keeping each
+/// one's start from PREVIOUS and its last success from its newest entry there.
+pub fn stale_repos(failed: &HashMap<String, String>, previous: Option<&KargoStagesFile>,
+                   now: DateTime<Utc>) -> Vec<KargoStale> {
+    let mut out: Vec<KargoStale> = failed.iter().map(|(repo, error)| {
+        let before = previous.and_then(|p| p.stale.iter().find(|s| s.repo.eq_ignore_ascii_case(repo)));
+        let newest = previous.into_iter().flat_map(|p| p.prs.iter())
+            .filter(|e| e.repo.eq_ignore_ascii_case(repo))
+            .filter_map(|e| e.as_of).max();
+        KargoStale {
+            repo: repo.clone(),
+            error: error.clone(),
+            since: before.map(|s| s.since).unwrap_or(now),
+            last_ok: newest.or_else(|| before.and_then(|s| s.last_ok)),
+        }
+    }).collect();
+    out.sort_by(|a, b| a.repo.cmp(&b.repo));
+    out
 }
 
 pub fn merged_prs_from(wip: &Value) -> Vec<(String, u64, String)> {
@@ -381,9 +525,29 @@ pub fn merged_prs_from(wip: &Value) -> Vec<(String, u64, String)> {
     out
 }
 
-pub async fn poll_kargo(config: &KargoConfig, dir: &Path) -> KargoStagesFile {
+pub async fn poll_kargo(config: &KargoConfig, dir: &Path,
+                        previous: Option<&KargoStagesFile>) -> KargoStagesFile {
+    let now = Utc::now();
     let mut errors = Vec::new();
-    let prs_in = merged_prs(dir);
+    let mut repos: Vec<String> = Vec::new();
+    for r in &config.repos {
+        if !repos.iter().any(|x| x.eq_ignore_ascii_case(&r.repo)) {
+            repos.push(r.repo.clone());
+        }
+    }
+    let Some(prs_in) = merged_prs(dir) else {
+        // No PR list to work from: the last good file stands as it was.
+        let mut errors = vec!["github-wip.json unreadable; kept the previous stages".to_string()];
+        if let Some(p) = previous {
+            errors.extend(p.errors.iter().cloned());
+        }
+        return KargoStagesFile {
+            updated: now, repos,
+            prs: previous.map(|p| p.prs.clone()).unwrap_or_default(),
+            errors,
+            stale: previous.map(|p| p.stale.clone()).unwrap_or_default(),
+        };
+    };
     let mut infos: HashMap<String, StageInfo> = HashMap::new();
 
     let mut by_project: HashMap<&str, Vec<String>> = HashMap::new();
@@ -398,16 +562,28 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path) -> KargoStagesFile {
             by_project.entry(r.project.as_str()).or_default().push(name);
         }
     }
+    // Once the login has expired every further call fails the same way, so
+    // the rest are skipped rather than spent.
+    let mut auth_error: Option<String> = None;
     let mut policies: HashMap<String, HashSet<String>> = HashMap::new();
     for project in by_project.keys() {
+        if auth_error.is_some() { break; }
         let args = ["get", "projectconfig", "--project", project, "-o", "json"]
             .map(str::to_string);
         match kargo_json(&args).await {
             Ok(v) => { policies.insert(project.to_string(), auto_stages(&v)); }
-            Err(e) => errors.push(e),
+            Err((kind, e)) => {
+                if kind == KargoFailure::Auth { auth_error = Some(e.clone()); }
+                errors.push(e);
+            }
         }
     }
+    let mut failed_projects: HashMap<String, String> = HashMap::new();
     for (project, names) in by_project {
+        if let Some(e) = &auth_error {
+            failed_projects.insert(project.to_string(), e.clone());
+            continue;
+        }
         let mut args = vec!["get".to_string(), "stages".into(), "--project".into(), project.into()];
         args.extend(names);
         args.extend(["-o".to_string(), "json".into()]);
@@ -418,14 +594,23 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path) -> KargoStagesFile {
                                  stage_info(stage, stage_repo.get(name).copied()));
                 }
             },
-            Err(e) => errors.push(e),
+            Err((kind, e)) => {
+                if kind == KargoFailure::Auth { auth_error = Some(e.clone()); }
+                failed_projects.insert(project.to_string(), e.clone());
+                errors.push(e);
+            }
         }
     }
 
+    let mut failed_repos: HashMap<String, String> = HashMap::new();
     let mut prs = Vec::new();
     for (repo_name, number, merge) in &prs_in {
         let mut answers: HashMap<String, Option<bool>> = HashMap::new();
         for repo in config.repos.iter().filter(|r| r.repo.eq_ignore_ascii_case(repo_name)) {
+        let project_error = failed_projects.get(&repo.project).cloned();
+        if let Some(e) = &project_error {
+            failed_repos.insert(repo.repo.clone(), e.clone());
+        }
         for stage in &repo.stages {
             let Some(info) = infos.get(&repo.kargo_stage(stage)) else { continue };
             // The freight verified before the current one is asked about only
@@ -450,39 +635,53 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path) -> KargoStagesFile {
                 pr.verified_at = first_verified(last, |rev| answers.get(rev).copied().flatten());
             }
         }
+        // An unread project, or a containment GitHub could not answer, leaves
+        // this entry a guess; the previous poll's answer is the better one.
+        let unknown = answers.values().any(Option::is_none);
+        if unknown && project_error.is_none() {
+            failed_repos.entry(repo.repo.clone())
+                .or_insert_with(|| "GitHub compare failed".to_string());
+        }
+        let trusted = project_error.is_none() && !unknown;
+        let mut pr = settle_entry(pr, trusted, previous, now);
+        if trusted && !policies.contains_key(&repo.project) {
+            // Policies unread but stages fine: keep what was known of them.
+            pr.manual = previous.and_then(|p| p.prs.iter().find(|e| {
+                e.repo.eq_ignore_ascii_case(&pr.repo) && e.number == pr.number && e.region == pr.region
+            })).and_then(|e| e.manual.clone());
+        }
         prs.push(pr);
         }
     }
 
-    let mut repos: Vec<String> = Vec::new();
-    for r in &config.repos {
-        if !repos.iter().any(|x| x.eq_ignore_ascii_case(&r.repo)) {
-            repos.push(r.repo.clone());
-        }
-    }
     KargoStagesFile {
-        updated: Utc::now(),
+        updated: now,
         repos,
         prs,
         errors,
+        stale: stale_repos(&failed_repos, previous, now),
     }
 }
 
 pub async fn run_kargo_adapter(config: KargoConfig, dir: PathBuf, meta: SharedMeta, once: bool) {
     let interval = Duration::from_secs(config.interval_secs.max(30));
+    let mut previous = read_previous(&dir);
     loop {
-        let data = poll_kargo(&config, &dir).await;
+        let data = poll_kargo(&config, &dir, previous.as_ref()).await;
         let last_error = match atomic_write_json(&dir, "kargo-stages.json", &data).await {
             Err(e) => Some(format!("write error: {e}")),
             Ok(()) => data.errors.first().cloned(),
         };
-        eprintln!("hub: kargo-stages: {} PRs, {} errors", data.prs.len(), data.errors.len());
+        eprintln!("hub: kargo-stages: {} PRs, {} errors, {} repos stale{}",
+                  data.prs.len(), data.errors.len(), data.stale.len(),
+                  data.errors.first().map(|e| format!(": {e}")).unwrap_or_default());
         update_meta(&meta, AdapterStatus {
             name: "kargo-stages".into(),
             last_poll: Some(Utc::now()),
             ok: last_error.is_none(),
             last_error,
         }, &dir).await;
+        previous = Some(data);
         if once { return; }
         tokio::time::sleep(interval).await;
     }
@@ -718,5 +917,97 @@ mod tests {
             {"number": 2, "state": "OPEN"},
             {"number": 3, "state": "MERGED"}]}]});
         assert_eq!(merged_prs_from(&wip), vec![("o/fub".to_string(), 1, "abc".to_string())]);
+    }
+
+    fn entry(number: u64, reached: &[&str], as_of: Option<&str>) -> KargoPr {
+        KargoPr {
+            reached: reached.iter().map(|s| s.to_string()).collect(),
+            as_of: as_of.map(|t| t.parse().unwrap()),
+            ..pr_stages(&fub(), number, "m", &HashMap::new(), None, |_| None)
+        }
+    }
+
+    fn file(prs: Vec<KargoPr>, stale: Vec<KargoStale>) -> KargoStagesFile {
+        KargoStagesFile { updated: Utc::now(), repos: vec!["o/fub".into()], prs, errors: vec![], stale }
+    }
+
+    #[test]
+    fn an_expired_login_is_auth_and_says_what_to_run() {
+        // The text the CLI printed on 2026-11-24 while every poll failed.
+        let raw = "kargo get projectconfig --project p -o json: Error: get client from config: \
+                   error refreshing token: error refreshing token; please use `kargo login` to re-authenticate";
+        assert_eq!(classify_failure(raw), KargoFailure::Auth);
+        assert_eq!(classify_failure("rpc error: code = Unauthenticated desc = 401"), KargoFailure::Auth);
+        assert!(failure_message(KargoFailure::Auth, raw).starts_with("login expired, run `kargo login --sso`"));
+    }
+
+    #[test]
+    fn timeouts_and_connection_errors_are_retried_others_are_not() {
+        assert_eq!(classify_failure("kargo timed out after 60s"), KargoFailure::Transient);
+        assert_eq!(classify_failure("dial tcp: lookup kargo.example.com: no such host"), KargoFailure::Transient);
+        assert_eq!(classify_failure("code = Unavailable desc = 503"), KargoFailure::Transient);
+        assert_eq!(classify_failure("stage \"x\" not found"), KargoFailure::Other);
+        assert_eq!(failure_message(KargoFailure::Other, "boom"), "boom");
+        assert_eq!(KARGO_RETRY_DELAYS.len(), 2, "two retries, then give up until the next poll");
+    }
+
+    #[test]
+    fn a_compare_github_refused_is_a_no_and_an_unreachable_one_unknown() {
+        assert_eq!(compare_error_answer("gh: Not Found (HTTP 404)"), Some(false));
+        assert_eq!(compare_error_answer("gh: No common ancestor (HTTP 422)"), Some(false));
+        assert_eq!(compare_error_answer("gh timeout after 30s: gh api ..."), None);
+    }
+
+    #[test]
+    fn a_failed_poll_keeps_the_last_good_stages_marked_stale() {
+        let now: DateTime<Utc> = "2026-11-24T03:00:00Z".parse().unwrap();
+        let shipped = entry(545, &["us-dev", "us-stg", "us-prd"], Some("2026-11-24T01:00:00Z"));
+        let previous = file(vec![shipped.clone()], vec![]);
+        let fresh = entry(545, &[], None);
+        let kept = settle_entry(fresh.clone(), false, Some(&previous), now);
+        assert_eq!(kept.reached, shipped.reached, "never written over with an empty list");
+        assert!(kept.stale);
+        assert_eq!(kept.as_of, shipped.as_of, "the age is the last good read's");
+        let unknown = settle_entry(entry(9, &["us-dev"], None), false, Some(&previous), now);
+        assert!(unknown.stale && unknown.reached.is_empty() && unknown.as_of.is_none(),
+                "no earlier answer: unknown, not a claim");
+        let good = settle_entry(fresh, true, Some(&previous), now);
+        assert!(!good.stale);
+        assert_eq!(good.as_of, Some(now));
+    }
+
+    #[test]
+    fn a_regional_entry_is_carried_only_into_its_own_region() {
+        let now = Utc::now();
+        let uk = KargoPr { region: Some("UK".into()), ..entry(1, &["uk-dev"], Some("2026-11-24T01:00:00Z")) };
+        let previous = file(vec![uk], vec![]);
+        let us = KargoPr { region: Some("US".into()), ..entry(1, &[], None) };
+        assert!(settle_entry(us, false, Some(&previous), now).reached.is_empty());
+    }
+
+    #[test]
+    fn a_stale_repo_keeps_when_it_started_failing_and_when_it_last_worked() {
+        let t = |s: &str| -> DateTime<Utc> { s.parse().unwrap() };
+        let failed: HashMap<String, String> = [("o/fub".to_string(), "login expired".to_string())].into();
+        let previous = file(vec![entry(1, &[], Some("2026-11-24T01:00:00Z")),
+                                 entry(2, &[], Some("2026-11-24T01:05:00Z"))], vec![]);
+        let first = stale_repos(&failed, Some(&previous), t("2026-11-24T02:00:00Z"));
+        assert_eq!(first, vec![KargoStale { repo: "o/fub".into(), error: "login expired".into(),
+                                            since: t("2026-11-24T02:00:00Z"),
+                                            last_ok: Some(t("2026-11-24T01:05:00Z")) }]);
+        let carried = file(vec![KargoPr { stale: true, ..entry(1, &[], Some("2026-11-24T01:05:00Z")) }], first);
+        let later = stale_repos(&failed, Some(&carried), t("2026-11-24T03:00:00Z"));
+        assert_eq!(later[0].since, t("2026-11-24T02:00:00Z"), "since does not move while it keeps failing");
+        assert!(stale_repos(&HashMap::new(), Some(&carried), Utc::now()).is_empty());
+    }
+
+    #[test]
+    fn files_written_before_staleness_still_parse_and_new_fields_stay_quiet() {
+        let old = r#"{"updated": "2026-11-24T03:18:02Z", "repos": ["o/fub"], "prs": [
+            {"repo": "o/fub", "number": 1, "merge_commit": "m", "stages": ["us-dev"], "reached": []}]}"#;
+        let f: KargoStagesFile = serde_json::from_str(old).unwrap();
+        assert!(!f.prs[0].stale && f.prs[0].as_of.is_none() && f.stale.is_empty());
+        let json = serde_json::to_value(entry(1, &[], None)).unwrap();
+        assert!(json.get("stale").is_none() && json.get("as_of").is_none());
     }
 }

@@ -380,4 +380,64 @@
     (should-not (decknix-ship--time ""))
     (should-not (decknix-ship--time nil))))
 
+;; --- stale or missing deploy data ----------------------------------------
+
+(defun decknix-ship-test--kargo-one (entry &rest kv)
+  "kargo-stages.json for o/svc holding ENTRY (nil for none), plus top-level KV."
+  (append (cl-loop for (k v) on kv by #'cddr collect (cons k v))
+          `((repos . ("o/svc"))
+            (prs . ,(and entry
+                         (list (append entry
+                                       '((repo . "o/svc") (number . 7)
+                                         (stages . ("uk-dev" "uk-stg" "uk-prd"))))))))))
+
+(ert-deftest decknix-ship--a-stale-entry-short-of-done-is-unknown-not-undeployed ()
+  "During a Kargo login expiry every merge read `merged, not deployed'."
+  (let* ((kargo (decknix-ship-test--kargo-one '((region . "UK") (reached . ("uk-dev")) (stale . t))))
+         (s (decknix-ship-status "o/svc" (decknix-ship-test--pr) '(()) kargo))
+         (lines (decknix-ship-lines s)))
+    (should (eq (plist-get s :state) 'unknown))
+    (should (equal (plist-get lines :current) "UK: stage unknown (Kargo unavailable)"))
+    (should-not (plist-get lines :next))
+    (should-not (string-match-p "not deployed" (plist-get lines :current)))
+    (should (equal (substring-no-properties (decknix-ship-label s)) "UK?"))
+    (should (eq (get-text-property 0 'face (decknix-ship-label s)) 'shadow))
+    (should (= (decknix-ship-severity s) 4))))
+
+(ert-deftest decknix-ship--a-stale-entry-that-had-shipped-stays-shipped ()
+  (let* ((kargo (decknix-ship-test--kargo-one
+                 '((reached . ("uk-dev" "uk-stg" "uk-prd")) (stale . t)
+                   (verified_at . "2026-11-19T03:00:00Z"))))
+         (s (decknix-ship-status "o/svc" (decknix-ship-test--pr) '(()) kargo)))
+    (should (eq (plist-get s :state) 'done))))
+
+(ert-deftest decknix-ship--no-entry-for-a-repo-kargo-cannot-read-is-unknown ()
+  (let* ((kargo (decknix-ship-test--kargo-one
+                 nil 'stale '(((repo . "o/svc") (error . "login expired")))))
+         (s (decknix-ship-status "o/svc" (decknix-ship-test--pr) '(()) kargo)))
+    (should (eq (plist-get s :state) 'unknown))
+    (should (equal (plist-get (decknix-ship-lines s) :current)
+                   "stage unknown (Kargo unavailable)"))))
+
+(ert-deftest decknix-ship--a-stale-teamcity-repo-is-unknown-unless-done ()
+  (let* ((deploys `((repos . (((repo . "o/mono") (stale . t)
+                               (branches . (((branch . "__default__")
+                                             (environments . (,(decknix-ship-test--env
+                                                                "development" "SUCCESS"
+                                                                "2026-11-18T00:00:00Z")))))))))))
+         (s (decknix-ship-status "o/mono" (decknix-ship-test--pr) deploys '(()))))
+    (should (eq (plist-get s :state) 'unknown))
+    (should (equal (plist-get (decknix-ship-lines s) :current)
+                   "stage unknown (TeamCity unavailable)"))))
+
+(ert-deftest decknix-ship--an-unknown-shipper-never-hides-a-known-one ()
+  "A US stage nobody can read must not stand in front of AU waiting on you."
+  (let* ((decknix-ship-repo-shippers decknix-ship-test--shippers)
+         (s (decknix-ship-status "o/mono" (decknix-ship-test--pr)
+                                 (decknix-ship-test--tc "development" "testing")
+                                 (decknix-ship-test--kargo-us '("us-dev") 'stale t))))
+    (should-not (eq (plist-get s :state) 'unknown))
+    (should-not (equal (plist-get (car (plist-get s :shippers)) :region) "US"))
+    (should (memq 'unknown (mapcar (lambda (x) (plist-get x :state)) (plist-get s :shippers))))))
+
 ;;; decknix-ship-test.el ends here

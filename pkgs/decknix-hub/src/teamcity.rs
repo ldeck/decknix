@@ -109,6 +109,12 @@ pub struct RepoDeployStatus {
     pub repo: String,
     pub tc_project: String,
     pub branches: Vec<BranchDeployStatus>,
+    /// The branches are the last good poll's: this one could not read them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stale: bool,
+    /// When the branches were read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<DateTime<Utc>>,
 }
 
 /// Top-level deploys file
@@ -116,6 +122,56 @@ pub struct RepoDeployStatus {
 pub struct TeamCityDeploysFile {
     pub updated: DateTime<Utc>,
     pub repos: Vec<RepoDeployStatus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+    /// Repos whose deploys this poll could not read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stale: Vec<crate::kargo::KargoStale>,
+}
+
+/// A TeamCity error that means "no such build configuration", which most
+/// projects legitimately lack for some environments, as opposed to the
+/// proxy or the server failing.
+pub fn missing_config_error(e: &str) -> bool {
+    e.contains("404")
+}
+
+/// FRESH with every repo in FAILED (repo -> error) replaced by its PREVIOUS
+/// entry marked stale (or kept, marked stale, when there is none), and the
+/// stale list recorded.  The same rule as kargo-stages.json: a poll that
+/// cannot read a repo never writes its deploys as absent.
+pub fn settle_deploys(mut fresh: TeamCityDeploysFile, failed: &HashMap<String, String>,
+                      previous: Option<&TeamCityDeploysFile>) -> TeamCityDeploysFile {
+    let now = fresh.updated;
+    for r in fresh.repos.iter_mut() {
+        if !failed.contains_key(&r.repo) {
+            r.stale = false;
+            r.as_of = Some(now);
+        }
+    }
+    for (repo, error) in failed {
+        let prior = previous.and_then(|p| p.repos.iter().find(|r| r.repo.eq_ignore_ascii_case(repo)));
+        fresh.repos.retain(|r| !r.repo.eq_ignore_ascii_case(repo) || prior.is_none());
+        match (prior, fresh.repos.iter_mut().find(|r| r.repo.eq_ignore_ascii_case(repo))) {
+            (Some(p), _) => fresh.repos.push(RepoDeployStatus { stale: true, ..p.clone() }),
+            (None, Some(r)) => { r.stale = true; r.as_of = None; }
+            (None, None) => {}
+        }
+        let before = previous.and_then(|p| p.stale.iter().find(|s| s.repo.eq_ignore_ascii_case(repo)));
+        fresh.stale.push(crate::kargo::KargoStale {
+            repo: repo.clone(),
+            error: error.clone(),
+            since: before.map(|s| s.since).unwrap_or(now),
+            last_ok: prior.and_then(|p| p.as_of).or_else(|| before.and_then(|s| s.last_ok)),
+        });
+        fresh.errors.push(format!("{repo}: {error}"));
+    }
+    fresh.stale.sort_by(|a, b| a.repo.cmp(&b.repo));
+    fresh
+}
+
+pub fn read_previous_deploys(dir: &Path) -> Option<TeamCityDeploysFile> {
+    serde_json::from_str(&std::fs::read_to_string(dir.join("teamcity-deploys.json")).ok()?).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +575,8 @@ async fn fetch_default_branch_envs(
     client: &Client,
     base: &str,
     tc_project: &str,
-) -> Vec<EnvDeployStatus> {
+) -> (Vec<EnvDeployStatus>, Option<String>) {
+    let mut failure = None;
     let mut env_statuses: HashMap<&'static str, EnvDeployStatus> = HashMap::new();
     for &(env_key, env_pattern) in ENV_PATTERNS {
         for &step in DEPLOY_STEPS {
@@ -543,13 +600,16 @@ async fn fetch_default_branch_envs(
                 Err(e) => {
                     // 404 / missing build config is expected; log quietly.
                     eprintln!("hub: tc deploys {tc_project}:{bt_id}: {e}");
+                    if !missing_config_error(&e) && failure.is_none() {
+                        failure = Some(e);
+                    }
                 }
             }
         }
     }
     let mut envs: Vec<EnvDeployStatus> = env_statuses.into_values().collect();
     envs.sort_by_key(|e| env_order(&e.env));
-    envs
+    (envs, failure)
 }
 
 /// For each WIP branch, query all builds in the TC project and extract deploy status per env.
@@ -558,10 +618,24 @@ async fn poll_deploy_status(
     base: &str,
     hub_dir: &Path,
     repo_tc_map: &HashMap<String, String>,
+    previous: Option<&TeamCityDeploysFile>,
 ) -> TeamCityDeploysFile {
     let branch_map = load_wip_branch_map(hub_dir);
     eprintln!("hub: tc deploys: tracking {} branches (wip + linked)", branch_map.len());
     let mut repos: HashMap<String, RepoDeployStatus> = HashMap::new();
+    let mut failed: HashMap<String, String> = HashMap::new();
+    if branch_map.is_empty() {
+        if let Some(p) = previous.filter(|p| !p.repos.is_empty()) {
+            // No branches to look up is an unreadable WIP feed, not a world
+            // without deploys: the last good file stands.
+            return TeamCityDeploysFile {
+                updated: Utc::now(),
+                repos: p.repos.clone(),
+                errors: vec!["no WIP branches to track; kept the previous deploys".into()],
+                stale: p.stale.clone(),
+            };
+        }
+    }
 
     // Group branches by repo (from both WIP and linked-prs)
     let mut repo_branches: HashMap<String, Vec<(String, u64)>> = HashMap::new();
@@ -597,6 +671,9 @@ async fn poll_deploy_status(
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("hub: tc deploys {}/{}:{}: {e}", repo, tc_project, branch);
+                    if !missing_config_error(&e) {
+                        failed.entry(repo.clone()).or_insert(e);
+                    }
                     continue;
                 }
             };
@@ -639,7 +716,10 @@ async fn poll_deploy_status(
         // count:1 so that infrequent deploys (Production, UK) are always
         // found regardless of how many Dev/Test builds have run since.
         {
-            let envs = fetch_default_branch_envs(client, base, &tc_project).await;
+            let (envs, failure) = fetch_default_branch_envs(client, base, &tc_project).await;
+            if let Some(e) = failure {
+                failed.entry(repo.clone()).or_insert(e);
+            }
             if !envs.is_empty() {
                 branch_statuses.push(BranchDeployStatus {
                     branch: "__default__".to_string(),
@@ -654,14 +734,18 @@ async fn poll_deploy_status(
                 repo: repo.clone(),
                 tc_project: tc_project.clone(),
                 branches: branch_statuses,
+                stale: false,
+                as_of: None,
             });
         }
     }
 
-    TeamCityDeploysFile {
+    settle_deploys(TeamCityDeploysFile {
         updated: Utc::now(),
         repos: repos.into_values().collect(),
-    }
+        errors: Vec::new(),
+        stale: Vec::new(),
+    }, &failed, previous)
 }
 
 // ---------------------------------------------------------------------------
@@ -684,6 +768,7 @@ pub async fn run_teamcity_adapter(
     // daemon's lifetime, so deploy polling never ran and
     // teamcity-deploys.json silently froze.
     let mut repo_tc_map = HashMap::new();
+    let mut previous_deploys = read_previous_deploys(&dir);
 
     loop {
         let result = poll_teamcity_builds(&config, &dir).await;
@@ -731,9 +816,22 @@ pub async fn run_teamcity_adapter(
             last_error,
         };
         if repo_tc_map.is_empty() {
-            update_meta(&meta, deploys_status(Some("no repo mapping: vcs-roots discovery failed".into())), &dir).await;
+            let error = "no repo mapping: vcs-roots discovery failed".to_string();
+            // TeamCity unreachable: every repo's last good deploys stand, marked.
+            if let Some(p) = previous_deploys.take() {
+                let failed = p.repos.iter().map(|r| (r.repo.clone(), error.clone())).collect();
+                let kept = settle_deploys(TeamCityDeploysFile {
+                    updated: Utc::now(), repos: Vec::new(), errors: Vec::new(), stale: Vec::new(),
+                }, &failed, Some(&p));
+                if let Err(e) = atomic_write_json(&dir, "teamcity-deploys.json", &kept).await {
+                    eprintln!("hub: write teamcity-deploys.json: {e}");
+                }
+                previous_deploys = Some(kept);
+            }
+            update_meta(&meta, deploys_status(Some(error)), &dir).await;
         } else {
-            let deploys = poll_deploy_status(&client, &base, &dir, &repo_tc_map).await;
+            let deploys = poll_deploy_status(&client, &base, &dir, &repo_tc_map,
+                                             previous_deploys.as_ref()).await;
             let deploy_count: usize = deploys.repos.iter()
                 .map(|r| r.branches.len())
                 .sum();
@@ -743,7 +841,10 @@ pub async fn run_teamcity_adapter(
             } else {
                 eprintln!("hub: tc deploys: {} repos, {} branches", deploys.repos.len(), deploy_count);
             }
-            update_meta(&meta, deploys_status(write.err().map(|e| format!("write error: {e}"))), &dir).await;
+            let error = write.err().map(|e| format!("write error: {e}"))
+                .or_else(|| deploys.errors.first().cloned());
+            update_meta(&meta, deploys_status(error), &dir).await;
+            previous_deploys = Some(deploys);
         }
 
         if once { return; }
@@ -771,5 +872,59 @@ mod vcs_root_tests {
     fn no_slug_without_github_url() {
         assert_eq!(vcs_root_repo_slug("Widgets main"), None);
         assert_eq!(vcs_root_repo_slug("https://github.com/acme"), None);
+    }
+}
+
+#[cfg(test)]
+mod settle_tests {
+    use super::*;
+
+    fn repo(name: &str, as_of: Option<&str>) -> RepoDeployStatus {
+        RepoDeployStatus {
+            repo: name.into(), tc_project: "P".into(),
+            branches: vec![BranchDeployStatus { branch: "__default__".into(), pr_number: None, environments: vec![] }],
+            stale: false, as_of: as_of.map(|t| t.parse().unwrap()),
+        }
+    }
+
+    fn file(repos: Vec<RepoDeployStatus>) -> TeamCityDeploysFile {
+        TeamCityDeploysFile { updated: "2026-11-24T03:00:00Z".parse().unwrap(), repos,
+                              errors: vec![], stale: vec![] }
+    }
+
+    #[test]
+    fn only_a_missing_build_configuration_is_expected() {
+        assert!(missing_config_error("TC API 404 Not Found"));
+        assert!(!missing_config_error("TC HTTP: error sending request"));
+        assert!(!missing_config_error("TC API 502 Bad Gateway"));
+    }
+
+    #[test]
+    fn a_repo_the_poll_could_not_read_keeps_its_last_deploys_marked_stale() {
+        let previous = file(vec![repo("o/a", Some("2026-11-24T01:00:00Z")), repo("o/b", Some("2026-11-24T01:00:00Z"))]);
+        let failed: HashMap<String, String> = [("o/a".to_string(), "TC HTTP: refused".to_string())].into();
+        let out = settle_deploys(file(vec![repo("o/b", None)]), &failed, Some(&previous));
+        let a = out.repos.iter().find(|r| r.repo == "o/a").expect("never dropped");
+        assert!(a.stale);
+        assert_eq!(a.as_of, previous.repos[0].as_of);
+        let b = out.repos.iter().find(|r| r.repo == "o/b").unwrap();
+        assert!(!b.stale && b.as_of == Some(out.updated));
+        assert_eq!(out.stale.len(), 1);
+        assert_eq!(out.stale[0].last_ok, previous.repos[0].as_of);
+        assert_eq!(out.errors, vec!["o/a: TC HTTP: refused".to_string()]);
+    }
+
+    #[test]
+    fn a_failing_repo_with_no_earlier_answer_is_kept_and_marked() {
+        let failed: HashMap<String, String> = [("o/a".to_string(), "x".to_string())].into();
+        let out = settle_deploys(file(vec![repo("o/a", None)]), &failed, None);
+        assert!(out.repos[0].stale && out.repos[0].as_of.is_none());
+    }
+
+    #[test]
+    fn old_deploy_files_still_parse() {
+        let f: TeamCityDeploysFile = serde_json::from_str(
+            r#"{"updated": "2026-11-24T03:00:00Z", "repos": [{"repo": "o/a", "tc_project": "P", "branches": []}]}"#).unwrap();
+        assert!(!f.repos[0].stale && f.errors.is_empty());
     }
 }

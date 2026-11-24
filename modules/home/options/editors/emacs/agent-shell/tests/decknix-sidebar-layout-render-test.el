@@ -24,6 +24,7 @@
 (defvar decknix--hub-reviews nil)
 (defvar decknix--hub-wip nil)
 (defvar decknix--hub-kargo-stages nil)
+(defvar decknix--hub-deploys nil)
 (defvar decknix--hub-jira-tasks nil)
 ;; Upstream agent-shell-attention's pending table, special for the same reason.
 (defvar agent-shell-attention--pending nil)
@@ -1019,12 +1020,29 @@ hides one silently; Reviews and WIP list only the board's sessions."
     (should (string-match-p "shipped #9" row))
     (should (eq 'font-lock-comment-face (get-text-property 0 'face row)))))
 
-(ert-deftest decknix-layout-render--kargo-errors-join-the-feed-line ()
+(ert-deftest decknix-layout-render--kargo-errors-get-their-own-line ()
   (let ((decknix--hub-wip nil)
+        (decknix--hub-deploys nil)
         (decknix--hub-kargo-stages '((errors . ("kargo not runnable")))))
     (with-temp-buffer
       (should (= 1 (decknix--layout-render-feed-errors 0 60)))
-      (should (string-match-p "partial: kargo: kargo not runnable" (buffer-string))))))
+      (should (string-match-p "Kargo partial: kargo not runnable" (buffer-string))))))
+
+(ert-deftest decknix-layout--stale-feeds-say-how-old-and-why-in-one-line ()
+  "A login expiry is one compact line with the data's age, not a raw error."
+  (let* ((now (float-time (date-to-time "2026-11-24T04:00:00Z")))
+         (kargo '((errors . ("login expired, run `kargo login --sso` (Error: ...)"))
+                  (stale . (((repo . "o/a") (error . "login expired, run `kargo login --sso` (x)")
+                             (since . "2026-11-24T02:30:00Z") (last_ok . "2026-11-24T02:00:00Z"))
+                            ((repo . "o/b") (error . "login expired, run `kargo login --sso` (x)")
+                             (since . "2026-11-24T02:30:00Z"))))))
+         (deploys '((stale . (((repo . "o/m") (error . "TC HTTP: refused")
+                               (since . "2026-11-24T03:50:00Z"))))))
+         (lines (decknix--layout-feed-warnings nil kargo deploys now)))
+    (should (equal (mapcar #'car lines)
+                   '("⚠ Kargo stale 2h · 2 repos · login expired, run `kargo login --sso`"
+                     "⚠ TeamCity failing 10m · o/m · TC HTTP: refused")))
+    (should-not (decknix--layout-feed-warnings nil '((stale . nil)) nil now))))
 
 (ert-deftest decknix-layout-render--feed-errors-are-named-once ()
   (let ((decknix--hub-wip '((errors . ("author merged: boom" "assignee open: bang")))))
