@@ -1139,8 +1139,8 @@ mod tests {
         let old = Heartbeat::from_value(&json!({"pid": 1, "at": 2})).unwrap();
         assert!(!old.control && old.armed_by.is_none());
         assert!(old.lanes_live.is_none() && old.spawn_max_live.is_none());
-        let lanes = Heartbeat::from_value(&json!({"pid": 1, "at": 2, "lanes_live": 3, "spawn_max_live": 12})).unwrap();
-        assert_eq!((lanes.lanes_live, lanes.spawn_max_live), (Some(3), Some(12)));
+        let lanes = Heartbeat::from_value(&json!({"pid": 1, "at": 2, "lanes_live": 3, "spawn_max_live": 32})).unwrap();
+        assert_eq!((lanes.lanes_live, lanes.spawn_max_live), (Some(3), Some(32)));
     }
 
     #[test]

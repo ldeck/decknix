@@ -95,7 +95,7 @@
           (decknix-agent-dispatch--release-queued nil)
           (decknix-agent-dispatch-lifecycle-policy 'always)
           (decknix-agent-dispatch-spawn-roots (list root))
-          (decknix-agent-dispatch-spawn-max-live 12)
+          (decknix-agent-dispatch-spawn-max-live 32)
           (decknix-agent-dispatch-spawn-min-interval 10)
           (decknix-agent-dispatch-retire-protected-tags '("coordinator"))
           (decknix-agent-dispatch-live-tags-function
@@ -1207,6 +1207,9 @@ ARGS: :id :session :prompt :created :expires :hash :version :mode."
       (delete-process (get-buffer-process buf))
       (kill-buffer buf))
     (should (= 0 (decknix-agent-dispatch-counted-lanes)))))
+
+(ert-deftest decknix-agent-dispatch/spawn-cap-defaults-to-32-lanes ()
+  (should (= 32 (eval (car (get 'decknix-agent-dispatch-spawn-max-live 'standard-value)) t))))
 
 (ert-deftest decknix-agent-dispatch/lane-usage-reports-counted-lanes-and-the-cap ()
   (dispatch-test-with-env

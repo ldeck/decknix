@@ -848,10 +848,10 @@ mod tests {
 
     #[test]
     fn lanes_line_reports_the_cap_and_what_counts() {
-        let h = Heartbeat { pid: 1, at: 1, lanes_live: Some(3), spawn_max_live: Some(12), ..Default::default() };
-        assert_eq!(lanes_line(&h).unwrap(), "3 of 12 (spawned or lane-N tagged sessions; others do not count)");
-        let full = Heartbeat { lanes_live: Some(12), spawn_max_live: Some(12), ..h.clone() };
-        assert!(lanes_line(&full).unwrap().starts_with("12 of 12 FULL"));
+        let h = Heartbeat { pid: 1, at: 1, lanes_live: Some(3), spawn_max_live: Some(32), ..Default::default() };
+        assert_eq!(lanes_line(&h).unwrap(), "3 of 32 (spawned or lane-N tagged sessions; others do not count)");
+        let full = Heartbeat { lanes_live: Some(32), spawn_max_live: Some(32), ..h.clone() };
+        assert!(lanes_line(&full).unwrap().starts_with("32 of 32 FULL"));
         assert!(lanes_line(&Heartbeat::default()).is_none());
     }
 

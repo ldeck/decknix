@@ -189,7 +189,7 @@ name before writing a request."
   :type '(alist :key-type string :value-type symbol)
   :group 'decknix-agent-dispatch)
 
-(defcustom decknix-agent-dispatch-spawn-max-live 12
+(defcustom decknix-agent-dispatch-spawn-max-live 32
   "Counted lanes at or above which a spawn is refused (`too-many-sessions').
 See `decknix-agent-dispatch-counted-lanes' for what counts."
   :type 'integer
