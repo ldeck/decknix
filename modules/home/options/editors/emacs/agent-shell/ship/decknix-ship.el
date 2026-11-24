@@ -322,6 +322,12 @@ which `:manual' t records so the lines can say so."
                  (cond ((member next (alist-get 'verifying entry)) 'verifying)
                        ((and (listp manual) (member next manual)) 'ready)
                        (t 'pending))))
+    ;; The hub found nothing in the merge that the repo deploys, so no
+    ;; freight will ever hold it; it dates such an entry by the merge.
+    (when (and (alist-get 'no_deploy entry) (not (eq (plist-get status :state) 'done)))
+      (setq status (append (list :state 'done :no-deploy (alist-get 'no_deploy entry)
+                                 :next nil)
+                           status)))
     (let ((out (append (list :kind 'gitops
                              :region (alist-get 'region entry)
                              :manual manual
@@ -574,6 +580,7 @@ treated as shipped just now, so it is seen at least once."
          (stage (if (eq state 'done) (plist-get status :current) (plist-get status :next)))
          (text (cond ((and (eq state 'done) (eq kind 'ci)) "✓ci")
                      ((and (eq state 'done) (eq kind 'none)) "merged")
+                     ((and (eq state 'done) (plist-get status :no-deploy)) "✓none")
                      ((eq state 'unknown) "?")
                      (t (concat (car cell)
                                 (if stage (decknix-ship--display stage region)
@@ -587,6 +594,7 @@ treated as shipped just now, so it is seen at least once."
   ✗test   failed at test (red)     ·dev   waiting for dev (amber)
   ⇢prd    ready for you to promote merged  nothing to deploy (green)
   ?       stage unknown: the deploy feed is unreadable (grey)
+  ✓none   no deploy needed: the merge changes no runtime file (green)
 
 A PR with several shippers shows the furthest-behind one and how many
 others are done: `US→prd +2✓'.  Every shipper's token is in
@@ -654,7 +662,9 @@ its region first and its stages without the region they repeat."
          (tag (lambda (text) (and text (if region (concat region ": " text) text)))))
     (list :current (funcall tag
                             (pcase state
-                              ('done (if current (concat "shipped to " current) "merged"))
+                              ('done (cond ((plist-get status :no-deploy) "no deploy needed")
+                                           (current (concat "shipped to " current))
+                                           (t "merged")))
                               ('failed (concat "failed in " (or next "deploy")))
                               ('deploying (concat "deploying " (or next "")))
                               ('verifying (concat "verifying " (or next "")))

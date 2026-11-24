@@ -181,7 +181,10 @@ deploy feed the hub cannot read gets one line of its own with the age of the
 data shown, `⚠ Kargo stale 2h · 6 repos · login expired, run kargo login
 --sso` (or `TeamCity`), and the stages it covers read `?`, `stage unknown
 (Kargo unavailable)`, in grey: unknown, never `not deployed`. A stage that
-had already shipped before the feed went quiet stays shipped.
+had already shipped before the feed went quiet stays shipped. A merge the
+hub found changes no runtime file of its repo (see the hub guide's Kargo
+section) is done at once: `no deploy needed`, listed as `no deploy` for
+the shipped retention.
 
 The rest of this page describes the PR-centric WIP of the previous layout.
 

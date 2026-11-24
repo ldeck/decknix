@@ -440,4 +440,20 @@
     (should-not (equal (plist-get (car (plist-get s :shippers)) :region) "US"))
     (should (memq 'unknown (mapcar (lambda (x) (plist-get x :state)) (plist-get s :shippers))))))
 
+;; --- no deploy needed --------------------------------------------------
+
+(ert-deftest decknix-ship--a-merge-changing-no-runtime-file-is-done-without-a-deploy ()
+  "nc-helix/go-links#7 added a Nix flake and read `next: promote' for days."
+  (let* ((kargo (decknix-ship-test--kargo-one
+                 '((reached . ()) (no_deploy . "no runtime files changed")
+                   (verified_at . "2026-11-19T01:00:00Z"))))
+         (s (decknix-ship-status "o/svc" (decknix-ship-test--pr) '(()) kargo))
+         (lines (decknix-ship-lines s)))
+    (should (eq (plist-get s :state) 'done))
+    (should (equal (plist-get s :no-deploy) "no runtime files changed"))
+    (should (= (plist-get s :done-at) (decknix-ship--time "2026-11-19T01:00:00Z")))
+    (should (equal (plist-get lines :current) "no deploy needed"))
+    (should-not (plist-get lines :next))
+    (should (equal (substring-no-properties (decknix-ship-label s)) "✓none"))))
+
 ;;; decknix-ship-test.el ends here

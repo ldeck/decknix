@@ -17,6 +17,15 @@
 // merged PR fall back to "deploying" each time a later merge rolled through,
 // which on a busy repo is most of the day.
 //
+// A merge that changes nothing the repo deploys never gets freight of its
+// own, so it would wait forever.  It is marked `no_deploy` (and dated by its
+// merge) when either its own files touch none of the repo's runtime paths,
+// or, `no_deploy_after_hours` after the merge with no stage holding it,
+// every file changed between the revision the first stage runs and the
+// merge is outside them.  Runtime paths are the repo's `runtime_paths`
+// globs when configured (its freight build's path filter), else every file
+// except documentation and repository metadata.
+//
 // Which stages promote automatically comes from the project's ProjectConfig
 // promotion policies; the others are listed as `manual`, so the sidebar can
 // say a merge is ready for a person to promote rather than in progress.
@@ -58,11 +67,14 @@ pub struct KargoConfig {
     pub enabled: bool,
     pub interval_secs: u64,
     pub repos: Vec<KargoRepo>,
+    /// Hours a merge no stage holds waits before the freight-to-merge
+    /// check; 0 disables it.
+    pub no_deploy_after_hours: u64,
 }
 
 impl Default for KargoConfig {
     fn default() -> Self {
-        Self { enabled: false, interval_secs: 300, repos: Vec::new() }
+        Self { enabled: false, interval_secs: 300, repos: Vec::new(), no_deploy_after_hours: 6 }
     }
 }
 
@@ -82,6 +94,10 @@ pub struct KargoRepo {
     /// `US`; copied onto each PR entry.
     #[serde(default)]
     pub region: Option<String>,
+    /// Globs of the files that change what the repo deploys; None for the
+    /// default (everything but docs and repository metadata).
+    #[serde(default)]
+    pub runtime_paths: Option<Vec<String>>,
 }
 
 impl KargoRepo {
@@ -152,6 +168,9 @@ pub struct KargoPr {
     /// When the stage lists were read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub as_of: Option<DateTime<Utc>>,
+    /// Why this merge needs no deploy, when it changes no runtime file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_deploy: Option<String>,
 }
 
 /// What one Kargo stage says about its current freight.
@@ -340,7 +359,97 @@ where
         verified_at: if all { verified_at } else { None },
         stale: false,
         as_of: None,
+        no_deploy: None,
     }
+}
+
+/// Files that are not runtime when a repo names no `runtime_paths`.
+pub const DEFAULT_NON_RUNTIME: [&str; 9] = [
+    "docs/**", "specs/**", ".specify/**", "**/*.md", "LICENSE*", "**/.gitignore",
+    "**/CODEOWNERS", ".github/ISSUE_TEMPLATE/**", ".github/pull_request_template.md",
+];
+
+/// Whether PATH matches GLOB: `**` any run of directories (or none), `*`
+/// anything within one segment, `?` one character in a segment.
+pub fn glob_match(glob: &str, path: &str) -> bool {
+    fn segs(g: &[&str], p: &[&str]) -> bool {
+        match (g.first(), p.first()) {
+            (None, None) => true,
+            (Some(&"**"), _) => segs(&g[1..], p) || (!p.is_empty() && segs(g, &p[1..])),
+            (Some(gs), Some(ps)) => seg(gs.as_bytes(), ps.as_bytes()) && segs(&g[1..], &p[1..]),
+            _ => false,
+        }
+    }
+    fn seg(g: &[u8], p: &[u8]) -> bool {
+        match (g.first(), p.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => seg(&g[1..], p) || (!p.is_empty() && seg(g, &p[1..])),
+            (Some(b'?'), Some(_)) => seg(&g[1..], &p[1..]),
+            (Some(a), Some(b)) => a == b && seg(&g[1..], &p[1..]),
+            _ => false,
+        }
+    }
+    let g: Vec<&str> = glob.split('/').collect();
+    let p: Vec<&str> = path.split('/').collect();
+    segs(&g, &p)
+}
+
+/// Whether changing PATH changes what REPO deploys.
+pub fn is_runtime(repo: &KargoRepo, path: &str) -> bool {
+    match &repo.runtime_paths {
+        Some(globs) => globs.iter().any(|g| glob_match(g, path)),
+        None => !DEFAULT_NON_RUNTIME.iter().any(|g| glob_match(g, path)),
+    }
+}
+
+/// The no-deploy reason for a merge whose changed FILES are all outside
+/// REPO's runtime paths, or None (also for an empty or unknown list).
+pub fn no_runtime_change(repo: &KargoRepo, files: Option<&[String]>, reason: &str) -> Option<String> {
+    let files = files.filter(|f| !f.is_empty())?;
+    (!files.iter().any(|f| is_runtime(repo, f))).then(|| reason.to_string())
+}
+
+/// GitHub truncates a compare's file list here; a full list is not proof.
+const COMPARE_FILES_CAP: usize = 300;
+
+static FILES_CACHE: OnceLock<RwLock<HashMap<String, Vec<String>>>> = OnceLock::new();
+fn files_cache() -> &'static RwLock<HashMap<String, Vec<String>>> {
+    FILES_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// The files a merged PR changed, cached forever (a merged PR's files do
+/// not change); None when GitHub cannot say.
+async fn pr_files(repo: &str, number: u64) -> Option<Vec<String>> {
+    let key = format!("pr:{repo}#{number}");
+    if let Some(hit) = files_cache().read().await.get(&key) {
+        return Some(hit.clone());
+    }
+    let path = format!("repos/{repo}/pulls/{number}/files");
+    let out = crate::gh_json(&["api", "--paginate", &path, "--jq", ".[].filename"]).await.ok()?;
+    let files: Vec<String> = out.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
+    files_cache().write().await.insert(key, files.clone());
+    Some(files)
+}
+
+/// The files changed from FROM to TO, when TO is ahead of FROM and GitHub
+/// listed them all; cached forever.
+async fn compare_files(repo: &str, from: &str, to: &str) -> Option<Vec<String>> {
+    let key = format!("cmp:{repo}:{from}...{to}");
+    if let Some(hit) = files_cache().read().await.get(&key) {
+        return Some(hit.clone());
+    }
+    let path = format!("repos/{repo}/compare/{from}...{to}");
+    let out = crate::gh_json(&["api", &path, "--jq", "[.status, (.files // [] | .[].filename)] | .[]"]).await.ok()?;
+    let mut lines = out.lines().map(str::trim).filter(|l| !l.is_empty());
+    if lines.next() != Some("ahead") {
+        return None;
+    }
+    let files: Vec<String> = lines.map(str::to_string).collect();
+    if files.len() >= COMPARE_FILES_CAP {
+        return None;
+    }
+    files_cache().write().await.insert(key, files.clone());
+    Some(files)
 }
 
 /// GitHub compare `status` meaning HEAD contains BASE.
@@ -456,7 +565,7 @@ async fn kargo_json_once(args: &[String]) -> Result<Value, String> {
 
 /// My merged PRs with a merge commit, from the WIP adapter's output; None
 /// when that output cannot be read, which is not the same as no PRs.
-fn merged_prs(dir: &Path) -> Option<Vec<(String, u64, String)>> {
+fn merged_prs(dir: &Path) -> Option<Vec<MergedPr>> {
     let text = std::fs::read_to_string(dir.join("github-wip.json")).ok()?;
     let v = serde_json::from_str::<Value>(&text).ok()?;
     Some(merged_prs_from(&v))
@@ -506,7 +615,10 @@ pub fn stale_repos(failed: &HashMap<String, String>, previous: Option<&KargoStag
     out
 }
 
-pub fn merged_prs_from(wip: &Value) -> Vec<(String, u64, String)> {
+/// (repo, number, merge commit, merged at).
+pub type MergedPr = (String, u64, String, Option<String>);
+
+pub fn merged_prs_from(wip: &Value) -> Vec<MergedPr> {
     let mut out = Vec::new();
     for repo in wip.get("repos").and_then(Value::as_array).into_iter().flatten() {
         let name = repo.get("repo").and_then(Value::as_str).unwrap_or_default();
@@ -518,7 +630,8 @@ pub fn merged_prs_from(wip: &Value) -> Vec<(String, u64, String)> {
                 pr.get("merge_commit").and_then(Value::as_str),
             ) else { continue };
             if merged {
-                out.push((name.to_string(), number, merge.to_string()));
+                let at = pr.get("merged_at").and_then(Value::as_str).map(str::to_string);
+                out.push((name.to_string(), number, merge.to_string(), at));
             }
         }
     }
@@ -553,7 +666,7 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path,
     let mut by_project: HashMap<&str, Vec<String>> = HashMap::new();
     let mut stage_repo: HashMap<String, &str> = HashMap::new();
     for r in &config.repos {
-        if !prs_in.iter().any(|(repo, _, _)| repo.eq_ignore_ascii_case(&r.repo)) {
+        if !prs_in.iter().any(|(repo, ..)| repo.eq_ignore_ascii_case(&r.repo)) {
             continue;
         }
         for s in &r.stages {
@@ -604,7 +717,7 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path,
 
     let mut failed_repos: HashMap<String, String> = HashMap::new();
     let mut prs = Vec::new();
-    for (repo_name, number, merge) in &prs_in {
+    for (repo_name, number, merge, merged_at) in &prs_in {
         let mut answers: HashMap<String, Option<bool>> = HashMap::new();
         for repo in config.repos.iter().filter(|r| r.repo.eq_ignore_ascii_case(repo_name)) {
         let project_error = failed_projects.get(&repo.project).cloned();
@@ -643,6 +756,13 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path,
                 .or_insert_with(|| "GitHub compare failed".to_string());
         }
         let trusted = project_error.is_none() && !unknown;
+        if trusted && pr.reached.len() < repo.stages.len() {
+            pr.no_deploy = no_deploy_reason(repo, &pr, merge, merged_at.as_deref(), &infos,
+                                            config.no_deploy_after_hours, now).await;
+            if pr.no_deploy.is_some() {
+                pr.verified_at = merged_at.clone();
+            }
+        }
         let mut pr = settle_entry(pr, trusted, previous, now);
         if trusted && !policies.contains_key(&repo.project) {
             // Policies unread but stages fine: keep what was known of them.
@@ -661,6 +781,25 @@ pub async fn poll_kargo(config: &KargoConfig, dir: &Path,
         errors,
         stale: stale_repos(&failed_repos, previous, now),
     }
+}
+
+/// Why PR (REPO's merge MERGE at MERGED_AT) needs no deploy, or None.
+async fn no_deploy_reason(repo: &KargoRepo, pr: &KargoPr, merge: &str, merged_at: Option<&str>,
+                          infos: &HashMap<String, StageInfo>, after_hours: u64,
+                          now: DateTime<Utc>) -> Option<String> {
+    let own = pr_files(&repo.repo, pr.number).await;
+    if let Some(reason) = no_runtime_change(repo, own.as_deref(), "no runtime files changed") {
+        return Some(reason);
+    }
+    let held = !pr.reached.is_empty() || !pr.promoting.is_empty() || !pr.verifying.is_empty();
+    let age = merged_at.and_then(|t| t.parse::<DateTime<Utc>>().ok()).map(|t| now - t)?;
+    if held || after_hours == 0 || age < chrono::Duration::hours(after_hours as i64) {
+        return None;
+    }
+    let first = repo.stages.first().and_then(|s| infos.get(&repo.kargo_stage(s)))?;
+    let deployed = first.revision.as_deref()?;
+    let between = compare_files(&repo.repo, deployed, merge).await;
+    no_runtime_change(repo, between.as_deref(), "no runtime change since the deployed build")
 }
 
 pub async fn run_kargo_adapter(config: KargoConfig, dir: PathBuf, meta: SharedMeta, once: bool) {
@@ -696,7 +835,7 @@ mod tests {
         KargoRepo {
             repo: "o/fub".into(), project: "p".into(), warehouse: "fub".into(),
             stages: vec!["us-dev".into(), "us-stg".into(), "us-prd".into()],
-            stage_pattern: None, region: None,
+            stage_pattern: None, region: None, runtime_paths: None,
         }
     }
 
@@ -916,7 +1055,7 @@ mod tests {
             {"number": 1, "state": "MERGED", "merge_commit": "abc"},
             {"number": 2, "state": "OPEN"},
             {"number": 3, "state": "MERGED"}]}]});
-        assert_eq!(merged_prs_from(&wip), vec![("o/fub".to_string(), 1, "abc".to_string())]);
+        assert_eq!(merged_prs_from(&wip), vec![("o/fub".to_string(), 1, "abc".to_string(), None)]);
     }
 
     fn entry(number: u64, reached: &[&str], as_of: Option<&str>) -> KargoPr {
@@ -1009,5 +1148,60 @@ mod tests {
         assert!(!f.prs[0].stale && f.prs[0].as_of.is_none() && f.stale.is_empty());
         let json = serde_json::to_value(entry(1, &[], None)).unwrap();
         assert!(json.get("stale").is_none() && json.get("as_of").is_none());
+    }
+
+    #[test]
+    fn globs_match_segments_and_runs_of_directories() {
+        assert!(glob_match("cmd/**", "cmd/go-links/main.go"));
+        assert!(glob_match("go.*", "go.sum"));
+        assert!(!glob_match("go.*", "cmd/go.mod"), "a bare glob is anchored at the root");
+        assert!(glob_match("**/*.md", "README.md"));
+        assert!(glob_match("**/*.md", "docs/a/b.md"));
+        assert!(glob_match("Dockerfile", "Dockerfile"));
+        assert!(!glob_match("Dockerfile", "nix/Dockerfile"));
+        assert!(glob_match("helm/**", "helm/templates/x.yaml"));
+        assert!(glob_match("LICENSE*", "LICENSE"));
+        assert!(glob_match("a?c", "abc") && !glob_match("a?c", "a/c"));
+    }
+
+    #[test]
+    fn a_nix_flake_pr_changes_nothing_a_go_service_deploys() {
+        // nc-helix/go-links#7, against its build workflow's path filter.
+        let repo = KargoRepo {
+            runtime_paths: Some(["cmd/**", "go.*", "Dockerfile", ".dockerignore", "helm/**",
+                                 "justfile", ".github/workflows/build-and-push.yaml"]
+                                .map(String::from).to_vec()),
+            ..fub()
+        };
+        let files: Vec<String> = [".github/workflows/nix.yaml", "README.md", "flake.lock", "flake.nix",
+                                  "nix/darwin.nix", "nix/nixos.nix"].map(String::from).to_vec();
+        assert_eq!(no_runtime_change(&repo, Some(&files), "r").as_deref(), Some("r"));
+        let mut code = files.clone();
+        code.push("cmd/go-links/main.go".into());
+        assert_eq!(no_runtime_change(&repo, Some(&code), "r"), None);
+        assert_eq!(no_runtime_change(&repo, Some(&[]), "r"), None, "no files listed is no proof");
+        assert_eq!(no_runtime_change(&repo, None, "r"), None);
+    }
+
+    #[test]
+    fn without_runtime_paths_only_docs_and_metadata_are_not_runtime() {
+        let repo = fub();
+        for f in ["docs/x.md", "specs/a/plan.md", ".specify/memory.md", "AGENTS.md", "LICENSE",
+                  ".github/CODEOWNERS", ".gitignore"] {
+            assert!(!is_runtime(&repo, f), "{f}");
+        }
+        for f in ["flake.nix", "src/main.rs", ".github/workflows/build.yaml", "Dockerfile"] {
+            assert!(is_runtime(&repo, f), "{f}: unknown files count, conservatively");
+        }
+    }
+
+    #[test]
+    fn a_no_deploy_reason_is_written_and_old_files_parse_without_one() {
+        let json = serde_json::to_value(KargoPr { no_deploy: Some("no runtime files changed".into()),
+                                                  ..entry(1, &[], None) }).unwrap();
+        assert_eq!(json["no_deploy"], "no runtime files changed");
+        assert!(serde_json::to_value(entry(1, &[], None)).unwrap().get("no_deploy").is_none());
+        let c: KargoConfig = serde_json::from_value(json!({"repos": []})).unwrap();
+        assert_eq!(c.no_deploy_after_hours, 6);
     }
 }

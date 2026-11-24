@@ -37,9 +37,11 @@ let
     kargo = {
       enabled = cfg.kargo.enable;
       interval_secs = cfg.kargo.interval;
+      no_deploy_after_hours = cfg.kargo.noDeployAfterHours;
       repos = map (r: {
         inherit (r) repo project warehouse stages region;
         stage_pattern = r.stagePattern;
+        runtime_paths = r.runtimePaths;
       }) cfg.kargo.repos;
     };
     teamcity = {
@@ -255,6 +257,20 @@ in
         description = "Seconds between Kargo polls (minimum 30).";
       };
 
+      noDeployAfterHours = mkOption {
+        type = types.int;
+        default = 6;
+        description = ''
+          Hours after a merge that no stage holds before the hub checks
+          whether anything that would change the deployed build has merged
+          since the revision dev runs: when every file changed between that
+          revision and the merge is outside the repo's runtime paths, the
+          PR is marked "no deploy needed".  0 disables this later check;
+          a PR whose own files touch no runtime path is marked at once
+          either way.
+        '';
+      };
+
       repos = mkOption {
         type = types.listOf (types.submodule {
           options = {
@@ -295,6 +311,22 @@ in
                 it with a `gitops` shipper of the same region in the Emacs
                 option `decknix-ship-repo-shippers` to combine Kargo with
                 TeamCity.
+              '';
+            };
+            runtimePaths = mkOption {
+              type = types.nullOr (types.listOf types.str);
+              default = null;
+              example = [ "cmd/**" "go.*" "Dockerfile" "helm/**" ];
+              description = ''
+                Globs (`*`, `**`, `?`) of the files that change what this
+                repo deploys: its image build context, Dockerfile and chart,
+                typically the path filter of the workflow that builds its
+                freight.  A merged PR touching none of them is shown as "no
+                deploy needed" instead of waiting forever for freight that
+                will never be built.  Null uses the default: every file is
+                runtime except documentation (`docs/`, `specs/`, `.specify/`,
+                `*.md`) and repository metadata (`LICENSE*`, `.gitignore`,
+                `CODEOWNERS`, issue and PR templates).
               '';
             };
           };

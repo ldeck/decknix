@@ -173,6 +173,28 @@ when a deploy query fails for a reason other than a missing build
 configuration (404), and lists the repo under `stale`. The log line for each
 poll names the first error.
 
+A merge that changes nothing the repo deploys never gets freight of its
+own, so it would wait forever. The hub marks it `no_deploy` (dated by the
+merge) in either of two cases:
+
+1. **Its own files touch no runtime path.** Checked as soon as it merges,
+   from the PR's file list.
+2. **Nothing runtime has merged since the deployed build.** Once
+   `noDeployAfterHours` (default 6) have passed with no stage holding the
+   merge, every file changed between the revision the first stage runs and
+   the merge is checked; if none is a runtime path, the build already
+   deployed is equivalent. A compare GitHub truncates (300 files) is never
+   taken as proof.
+
+Runtime paths are a repo's `runtimePaths` globs (`*`, `**`, `?`) when set,
+typically the path filter of the workflow that builds its freight, for
+example `[ "cmd/**" "go.*" "Dockerfile" ".dockerignore" "helm/**" ]`.
+Without them every file counts except documentation (`docs/`, `specs/`,
+`.specify/`, `*.md`) and repository metadata (`LICENSE*`, `.gitignore`,
+`CODEOWNERS`, issue and PR templates), so an unlisted repo errs towards
+waiting for a deploy. The sidebar shows such a PR as done, `no deploy
+needed`, for the shipped retention, then drops it.
+
 In the sidebar a stale stage that had already shipped stays shipped; any
 other stale or missing stage reads `stage unknown (Kargo unavailable)` in
 grey, never `not deployed`, and asks nothing of you. One line under the WIP

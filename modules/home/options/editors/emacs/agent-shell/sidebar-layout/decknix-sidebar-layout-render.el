@@ -1381,7 +1381,7 @@ window, since the glyphs are the part worth keeping when space runs out."
          (shipped (eq (plist-get pr :visibility) 'shipped))
          ;; A merged PR's age says nothing; where it is in the pipeline is
          ;; the one thing left to know about it.
-         (age (cond (shipped "shipped")
+         (age (cond (shipped (if (plist-get ship :no-deploy) "no deploy" "shipped"))
                     (ship (decknix-ship-label ship))
                     (t (decknix--hub-format-age (alist-get 'updated raw)))))
          (num (format "#%s" (plist-get pr :number)))
