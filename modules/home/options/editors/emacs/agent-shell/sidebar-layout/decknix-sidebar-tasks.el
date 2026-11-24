@@ -10,10 +10,16 @@
 ;; What there is to do, beside what is being done.  Four groups, each
 ;; capped at `decknix-sidebar-tasks-per-group' rows and collapsible:
 ;;
-;;   In progress   Jira issues assigned to me and not Done; `●' when a live
+;;   In progress   Jira issues assigned to me in the In Progress status
+;;                 category (not To Do, not Done); `●' when a live
 ;;                 session works one (its key is in the session's name or
 ;;                 tags, or in the title or branch of a PR the session owns)
-;;   To pick up    unassigned To Do issues in an open sprint
+;;   To pick up    unassigned To Do issues in an open sprint of the
+;;                 pick-up projects
+;;
+;; A Jira group's count is the hub's true total (`in_progress_total',
+;; `pick_up_total'), not the number of rows fetched, which stops at the
+;; fetch cap; `… N more' says how many are not listed.
 ;;   Chores        pending Taskwarrior chores
 ;;   Issues        open GitHub issues assigned to me
 ;;
@@ -129,16 +135,18 @@ add their titles and branches."
 JIRA is the parsed jira-tasks.json, CHORES task-chores.json and ISSUES
 github-issues.json.  In progress lists issues a session works first."
   (let* ((mine (mapcar (lambda (i) (decknix--tasks-jira-row i 'in-progress sessions-by-key))
-                       (seq-remove (lambda (i) (equal (alist-get 'status_category i) "done"))
+                       (seq-filter (lambda (i) (equal (alist-get 'status_category i) "indeterminate"))
                                    (alist-get 'items jira))))
          (mine (append (seq-filter (lambda (r) (plist-get r :sessions)) mine)
                        (seq-remove (lambda (r) (plist-get r :sessions)) mine))))
     (seq-filter
      (lambda (g) (plist-get g :rows))
-     (list (list :id "in-progress" :label "In progress" :rows mine)
+     (list (list :id "in-progress" :label "In progress" :rows mine
+                 :total (alist-get 'in_progress_total jira))
            (list :id "pick-up" :label "To pick up"
                  :rows (mapcar (lambda (i) (decknix--tasks-jira-row i 'pick-up sessions-by-key))
-                               (alist-get 'pick_up jira)))
+                               (alist-get 'pick_up jira))
+                 :total (alist-get 'pick_up_total jira))
            (list :id "chores" :label "Chores"
                  :rows (mapcar #'decknix--tasks-chore-row (alist-get 'items chores)))
            (list :id "issues" :label "Issues"
@@ -199,16 +207,21 @@ github-issues.json.  In progress lists issues a session works first."
                         "RET for actions")
            props)))
 
+(defun decknix--tasks-group-total (group)
+  "Return how many items GROUP has: the hub's total, else its rows."
+  (max (length (plist-get group :rows)) (or (plist-get group :total) 0)))
+
 (defun decknix--tasks-render-group (line-num width group)
   "Insert GROUP's header and rows.  Returns LINE-NUM."
   (let* ((id (plist-get group :id))
          (rows (plist-get group :rows))
+         (total (decknix--tasks-group-total group))
          (key (concat "tasks:" id))
          (all (decknix--layout-expanded-p (concat "tasks-all:" id)))
          (limit (and (not all) decknix-sidebar-tasks-per-group))
          (shown (if limit (seq-take rows limit) rows))
-         (held (- (length rows) (length shown))))
-    (insert (decknix--layout-wip-group-header (plist-get group :label) (length rows) key " ")
+         (held (- total (length shown))))
+    (insert (decknix--layout-wip-group-header (plist-get group :label) total key " ")
             "\n")
     (setq line-num (1+ line-num))
     (unless (decknix--layout-collapsed-p key)
@@ -216,10 +229,14 @@ github-issues.json.  In progress lists issues a session works first."
         (insert (decknix--tasks-row-text row width) "\n")
         (setq line-num (1+ line-num)))
       (when (> held 0)
-        (insert (propertize (format "     … %d more" held)
-                            'face 'font-lock-comment-face
-                            'decknix-layout-expand-key (concat "tasks-all:" id)
-                            'help-echo "RET to list them all")
+        ;; Listing all shows what was fetched; the rest are only in Jira.
+        (insert (if all
+                    (propertize (format "     … %d more in Jira" held)
+                                'face 'font-lock-comment-face)
+                  (propertize (format "     … %d more" held)
+                              'face 'font-lock-comment-face
+                              'decknix-layout-expand-key (concat "tasks-all:" id)
+                              'help-echo "RET to list them all"))
                 "\n")
         (setq line-num (1+ line-num))))
     line-num))
@@ -232,7 +249,7 @@ github-issues.json.  In progress lists issues a session works first."
       (insert "\n")
       (setq line-num (1+ line-num))
       (decknix--sidebar-render-section-header
-       (format "Tasks (%d)" (apply #'+ (mapcar (lambda (g) (length (plist-get g :rows))) groups)))
+       (format "Tasks (%d)" (apply #'+ (mapcar #'decknix--tasks-group-total groups)))
        'tasks)
       (setq line-num (1+ line-num))
       (when errs

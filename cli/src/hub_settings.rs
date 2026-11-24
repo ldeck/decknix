@@ -25,6 +25,9 @@ pub enum HubAction {
         /// Remove the override and go back to the Nix-configured default
         #[arg(long, conflicts_with = "keys")]
         clear: bool,
+        /// Act on the projects offered to pick up (`pick_up_projects`) instead
+        #[arg(long)]
+        pick_up: bool,
     },
 }
 
@@ -45,8 +48,13 @@ pub fn parse_keys(words: &[String]) -> Vec<String> {
 
 /// The `[hub.jira] projects` override in settings TEXT, if any.
 pub fn read_projects(text: &str) -> Option<Vec<String>> {
+    read_key(text, "projects")
+}
+
+/// The `[hub.jira] NAME` list in settings TEXT, if any.
+pub fn read_key(text: &str, name: &str) -> Option<Vec<String>> {
     let table: toml::Table = text.parse().ok()?;
-    let arr = table.get("hub")?.get("jira")?.get("projects")?.as_array()?;
+    let arr = table.get("hub")?.get("jira")?.get(name)?.as_array()?;
     Some(arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
 }
 
@@ -56,8 +64,13 @@ fn is_header(line: &str) -> bool {
 
 /// TEXT with `[hub.jira] projects` set to KEYS, or removed when KEYS is None.
 pub fn set_projects(text: &str, keys: Option<&[String]>) -> String {
+    set_key(text, "projects", keys)
+}
+
+/// TEXT with `[hub.jira] NAME` set to KEYS, or removed when KEYS is None.
+pub fn set_key(text: &str, name: &str, keys: Option<&[String]>) -> String {
     let new_line = keys.map(|k| format!(
-        "projects = [{}]",
+        "{name} = [{}]",
         k.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(", ")));
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     let header = lines.iter().position(|l| l.trim() == "[hub.jira]");
@@ -66,7 +79,7 @@ pub fn set_projects(text: &str, keys: Option<&[String]>) -> String {
             let end = lines[h + 1..].iter().position(|l| is_header(l)).map_or(lines.len(), |i| h + 1 + i);
             let existing = (h + 1..end).find(|&i| {
                 let t = lines[i].trim_start();
-                t.starts_with("projects") && t["projects".len()..].trim_start().starts_with('=')
+                t.starts_with(name) && t[name.len()..].trim_start().starts_with('=')
             });
             match (existing, new_line) {
                 (Some(i), Some(l)) => lines[i] = l,
@@ -92,13 +105,18 @@ pub fn set_projects(text: &str, keys: Option<&[String]>) -> String {
 
 pub fn run(action: HubAction) -> Result<()> {
     match action {
-        HubAction::JiraProjects { keys, clear } => {
+        HubAction::JiraProjects { keys, clear, pick_up } => {
+            let (name, option, what) = if pick_up {
+                ("pick_up_projects", "pickUpProjects (else projects)", "Jira pick-up projects")
+            } else {
+                ("projects", "projects", "Jira projects")
+            };
             let path = settings_path();
             let text = std::fs::read_to_string(&path).unwrap_or_default();
             if keys.is_empty() && !clear {
-                match read_projects(&text) {
+                match read_key(&text, name) {
                     Some(p) => println!("{}  (override in {})", p.join(" "), path.display()),
-                    None => println!("no override: the hub uses decknix.services.hub.jira.projects from your config"),
+                    None => println!("no override: the hub uses decknix.services.hub.jira.{option} from your config"),
                 }
                 return Ok(());
             }
@@ -106,7 +124,7 @@ pub fn run(action: HubAction) -> Result<()> {
             if !clear && parsed.is_empty() {
                 anyhow::bail!("no valid project keys in {:?}", keys);
             }
-            let updated = set_projects(&text, if clear { None } else { Some(&parsed) });
+            let updated = set_key(&text, name, if clear { None } else { Some(&parsed) });
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)?;
             }
@@ -114,7 +132,7 @@ pub fn run(action: HubAction) -> Result<()> {
             if clear {
                 println!("cleared; the hub goes back to its configured projects at its next Jira poll");
             } else {
-                println!("Jira projects: {}  (the hub picks this up at its next Jira poll)", parsed.join(" "));
+                println!("{what}: {}  (the hub picks this up at its next Jira poll)", parsed.join(" "));
             }
             Ok(())
         }
@@ -154,6 +172,16 @@ mod tests {
         let text = "[hub.jira]\nprojects = [\"OLD\"]\nother = 1\n";
         assert_eq!(set_projects(text, None), "[hub.jira]\nother = 1\n");
         assert_eq!(set_projects("", None), "\n");
+    }
+
+    #[test]
+    fn pick_up_projects_sit_beside_projects_without_touching_them() {
+        let text = "[hub.jira]\nprojects = [\"HX\"]\n";
+        let out = set_key(text, "pick_up_projects", Some(&keys(&["US"])));
+        assert_eq!(out, "[hub.jira]\npick_up_projects = [\"US\"]\nprojects = [\"HX\"]\n");
+        assert_eq!(read_key(&out, "pick_up_projects"), Some(keys(&["US"])));
+        assert_eq!(read_projects(&out), Some(keys(&["HX"])));
+        assert_eq!(set_key(&out, "pick_up_projects", None), text);
     }
 
     #[test]

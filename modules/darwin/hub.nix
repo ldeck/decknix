@@ -25,6 +25,7 @@ let
       project = cfg.jira.project;
       projects = cfg.jira.projects;
       pick_up = cfg.jira.pickUp;
+      pick_up_projects = cfg.jira.pickUpProjects;
       statuses = cfg.jira.statuses;
       max_results = cfg.jira.maxResults;
     };
@@ -180,7 +181,8 @@ in
         example = [ "ABC" "XYZ" ];
         description = ''
           Jira project keys the sidebar Tasks section lists: issues assigned to
-          me that are not Done, and unassigned To Do issues in an open sprint.
+          me in progress (and, unless `pickUpProjects` says otherwise,
+          unassigned To Do issues in an open sprint).
           `[hub.jira] projects` in ~/.config/decknix/settings.toml overrides
           this at runtime (set it with `decknix hub jira-projects KEY...`); the
           hub re-reads it on every poll, so no rebuild is needed.
@@ -190,7 +192,20 @@ in
       pickUp = mkOption {
         type = types.bool;
         default = true;
-        description = "Also list unassigned To Do issues in open sprints of `projects`.";
+        description = "Also list unassigned To Do issues in open sprints of `pickUpProjects`.";
+      };
+
+      pickUpProjects = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        example = [ "ABC" ];
+        description = ''
+          Jira project keys whose unassigned To Do issues in an open sprint
+          the Tasks section offers to pick up.  Empty means `projects`.
+          `[hub.jira] pick_up_projects` in ~/.config/decknix/settings.toml
+          overrides it at runtime (`decknix hub jira-projects --pick-up
+          KEY...`).
+        '';
       };
 
       statuses = mkOption {

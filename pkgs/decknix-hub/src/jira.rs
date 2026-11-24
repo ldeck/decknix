@@ -36,6 +36,9 @@ pub struct JiraConfig {
     pub settings_file: Option<String>,
     /// Also list unassigned To Do issues in open sprints.
     pub pick_up: bool,
+    /// Projects whose unassigned To Do issues are listed to pick up; empty
+    /// means `projects`.  Overridden by `[hub.jira] pick_up_projects`.
+    pub pick_up_projects: Vec<String>,
     /// Statuses to include
     pub statuses: Vec<String>,
     /// Max results per poll
@@ -54,6 +57,7 @@ impl Default for JiraConfig {
             projects: Vec::new(),
             settings_file: None,
             pick_up: true,
+            pick_up_projects: Vec::new(),
             statuses: vec![
                 "Ready".into(),
                 "In Progress".into(),
@@ -137,6 +141,16 @@ pub struct JiraTasksFile {
     /// The project keys this poll used.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<String>,
+    /// The project keys the pick-up query used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pick_up_projects: Vec<String>,
+    /// How many issues assigned to me are in the In Progress status
+    /// category, however many `items` holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_progress_total: Option<u64>,
+    /// How many issues there are to pick up, however many `pick_up` holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pick_up_total: Option<u64>,
     /// Queries that failed without failing the poll (pick-up).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
@@ -324,6 +338,22 @@ pub fn effective_projects(config: &JiraConfig, settings: Option<&str>) -> Vec<St
     }
 }
 
+/// The project keys to pick up from: `[hub.jira] pick_up_projects` in
+/// SETTINGS when present, else the configured list, else PROJECTS.
+pub fn effective_pick_up_projects(config: &JiraConfig, settings: Option<&str>,
+                                  projects: &[String]) -> Vec<String> {
+    let from_settings = settings
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("hub")?.get("jira")?.get("pick_up_projects")?.as_array().cloned())
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(normalise_key)).filter(|k| !k.is_empty()).collect::<Vec<_>>());
+    match from_settings {
+        Some(p) => p,
+        None if !config.pick_up_projects.is_empty() =>
+            config.pick_up_projects.iter().map(|k| normalise_key(k)).collect(),
+        None => projects.to_vec(),
+    }
+}
+
 fn normalise_key(k: &str) -> String {
     k.trim().to_ascii_uppercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect()
 }
@@ -338,11 +368,27 @@ pub fn in_progress_jql(projects: &[String]) -> String {
     format!("{scope}assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC")
 }
 
+/// Assigned to me and in the In Progress status category (not To Do, not
+/// Done), in PROJECTS: what the Tasks section counts as in progress.
+pub fn in_progress_count_jql(projects: &[String]) -> String {
+    let scope = if projects.is_empty() { String::new() } else { format!("{} AND ", project_clause(projects)) };
+    format!("{scope}assignee = currentUser() AND statusCategory = \"In Progress\"")
+}
+
+fn pick_up_filter(projects: &[String]) -> String {
+    format!("{} AND assignee is EMPTY AND statusCategory = \"To Do\" AND sprint in openSprints()",
+            project_clause(projects))
+}
+
 /// Unassigned To Do issues in an open sprint of PROJECTS.  A project with no
 /// sprints simply contributes nothing.
 pub fn pick_up_jql(projects: &[String]) -> String {
-    format!("{} AND assignee is EMPTY AND statusCategory = \"To Do\" AND sprint in openSprints() ORDER BY rank ASC",
-            project_clause(projects))
+    format!("{} ORDER BY rank ASC", pick_up_filter(projects))
+}
+
+/// The pick-up query without its order, for counting.
+pub fn pick_up_count_jql(projects: &[String]) -> String {
+    pick_up_filter(projects)
 }
 
 /// Convert a sub-task issue (returned inside `fields.subtasks`) into the
@@ -427,15 +473,51 @@ pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, Strin
         .into_iter().map(|i| to_task(i, base)).collect();
 
     let mut errors = Vec::new();
+    // `/search/jql` reports no total, so the lists stop at their cap; the
+    // counts come from the count endpoint instead.
+    let in_progress_total = match approximate_count(&client, config, &token,
+                                                    &in_progress_count_jql(&projects)).await {
+        Ok(n) => Some(n),
+        Err(e) => { errors.push(format!("in-progress count: {e}")); None }
+    };
+    let pick_up_projects = effective_pick_up_projects(config, settings.as_deref(), &projects);
     let mut pick_up = Vec::new();
-    if config.pick_up && !projects.is_empty() {
-        match search(&client, config, &token, &pick_up_jql(&projects), 50).await {
+    let mut pick_up_total = None;
+    if config.pick_up && !pick_up_projects.is_empty() {
+        match search(&client, config, &token, &pick_up_jql(&pick_up_projects), 50).await {
             Ok(issues) => pick_up = issues.into_iter().map(|i| to_task(i, base)).collect(),
             Err(e) => errors.push(format!("pick-up: {e}")),
         }
+        match approximate_count(&client, config, &token, &pick_up_count_jql(&pick_up_projects)).await {
+            Ok(n) => pick_up_total = Some(n),
+            Err(e) => errors.push(format!("pick-up count: {e}")),
+        }
     }
 
-    Ok(JiraTasksFile { updated: Utc::now(), items, pick_up, projects, errors })
+    Ok(JiraTasksFile { updated: Utc::now(), items, pick_up, projects, pick_up_projects,
+                       in_progress_total, pick_up_total, errors })
+}
+
+#[derive(Debug, Deserialize)]
+struct JiraCountResponse {
+    count: u64,
+}
+
+/// How many issues JQL matches, from Jira's count endpoint.
+async fn approximate_count(client: &reqwest::Client, config: &JiraConfig, token: &str,
+                           jql: &str) -> Result<u64, String> {
+    let url = format!("{}/rest/api/3/search/approximate-count", config.base_url.trim_end_matches('/'));
+    let resp = client.post(&url)
+        .basic_auth(&config.email, Some(token))
+        .json(&serde_json::json!({ "jql": jql }))
+        .send().await
+        .map_err(|e| format!("Jira HTTP error: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Jira API {status}: {}", &body[..body.len().min(200)]));
+    }
+    resp.json::<JiraCountResponse>().await.map(|r| r.count).map_err(|e| format!("Jira parse error: {e}"))
 }
 
 async fn search(client: &reqwest::Client, config: &JiraConfig, token: &str, jql: &str,
@@ -646,9 +728,10 @@ mod tests {
     #[test]
     fn tasks_file_omits_empty_extras() {
         let f = JiraTasksFile { updated: Utc::now(), items: vec![], pick_up: vec![],
-                                projects: vec![], errors: vec![] };
+                                projects: vec![], pick_up_projects: vec![],
+                                in_progress_total: None, pick_up_total: None, errors: vec![] };
         let json = serde_json::to_string(&f).unwrap();
-        assert!(!json.contains("pick_up") && !json.contains("errors"), "{json}");
+        assert!(!json.contains("pick_up") && !json.contains("errors") && !json.contains("total"), "{json}");
     }
 
     // The enhanced `/search/jql` envelope: `issues` + a `nextPageToken`
@@ -696,5 +779,31 @@ mod tests {
         assert!(resp.issues.is_empty());
         assert_eq!(resp.next_page_token, None);
         assert_eq!(resp.is_last, None);
+    }
+
+    #[test]
+    fn in_progress_counts_only_the_in_progress_category() {
+        let p = vec!["HX".to_string()];
+        assert_eq!(in_progress_count_jql(&p),
+                   "project in (HX) AND assignee = currentUser() AND statusCategory = \"In Progress\"");
+        assert!(!pick_up_count_jql(&p).contains("ORDER BY"), "a count takes no order");
+        assert_eq!(pick_up_jql(&p), format!("{} ORDER BY rank ASC", pick_up_count_jql(&p)));
+    }
+
+    #[test]
+    fn pick_up_projects_default_to_the_projects_and_can_differ() {
+        let projects = vec!["HX".to_string(), "DOS".to_string()];
+        let cfg = JiraConfig::default();
+        assert_eq!(effective_pick_up_projects(&cfg, None, &projects), projects);
+        let cfg = JiraConfig { pick_up_projects: vec!["us".into()], ..Default::default() };
+        assert_eq!(effective_pick_up_projects(&cfg, None, &projects), vec!["US"]);
+        let toml = "[hub.jira]\nprojects = [\"HX\"]\npick_up_projects = [\"conn\", \"PLAT\"]\n";
+        assert_eq!(effective_pick_up_projects(&cfg, Some(toml), &projects), vec!["CONN", "PLAT"]);
+    }
+
+    #[test]
+    fn the_count_response_parses() {
+        let r: JiraCountResponse = serde_json::from_str(r#"{"count": 137}"#).unwrap();
+        assert_eq!(r.count, 137);
     }
 }

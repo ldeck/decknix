@@ -1066,6 +1066,9 @@ Options:
       --clear
           Remove the override and go back to the Nix-configured default
 
+      --pick-up
+          Act on the projects offered to pick up (`pick_up_projects`) instead
+
   -h, --help
           Print help
 ```

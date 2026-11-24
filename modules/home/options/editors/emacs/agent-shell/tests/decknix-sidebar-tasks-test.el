@@ -17,7 +17,9 @@
                (status_category . "indeterminate") (url . "https://j/HX-1"))
               ((key . "HX-2") (summary . "second") (status . "Blocked")
                (status_category . "indeterminate") (url . "https://j/HX-2"))
-              ((key . "HX-3") (summary . "gone") (status . "Done") (status_category . "done"))))
+              ((key . "HX-3") (summary . "gone") (status . "Done") (status_category . "done"))
+              ((key . "HX-4") (summary . "not started") (status . "To Do")
+               (status_category . "new") (url . "https://j/HX-4"))))
     (pick_up . (((key . "DOS-9") (summary . "take me") (status . "To Do")
                  (status_category . "new") (url . "https://j/DOS-9"))))))
 
@@ -126,5 +128,25 @@
                (lambda (&rest args) (setq cmd (plist-get args :command)) nil)))
       (decknix-layout-chore-info "u1"))
     (should (equal '("task" "rc.gc=off" "rc.hooks=off" "rc.verbose=nothing" "u1" "info") cmd))))
+
+(ert-deftest decknix-tasks--in-progress-is-the-in-progress-category-only ()
+  "An assigned To Do issue is not in progress: HX-4 sat in that group."
+  (tasks-test--with nil
+    (should-not (string-match-p "HX-4" (tasks-test--render)))))
+
+(ert-deftest decknix-tasks--groups-count-the-true-totals ()
+  "The groups read `(50)', the fetch cap, however many there were."
+  (tasks-test--with nil
+    (let ((decknix--hub-jira-tasks (append '((in_progress_total . 137) (pick_up_total . 64))
+                                           tasks-test--jira)))
+      (decknix-layout-invalidate-tasks)
+      (let ((out (tasks-test--render)))
+        (should (string-match-p "In progress (137)" out))
+        (should (string-match-p "To pick up (64)" out))
+        (should (string-match-p "… 135 more" out))
+        (should (string-match-p "… 63 more" out))
+        (should (string-match-p "Tasks (203)" out)))
+      (puthash "tasks-all:in-progress" t decknix--layout-expanded)
+      (should (string-match-p "… 135 more in Jira" (tasks-test--render))))))
 
 ;;; decknix-sidebar-tasks-test.el ends here

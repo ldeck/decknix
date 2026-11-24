@@ -82,20 +82,30 @@ cat ~/.config/decknix/hub/meta.json
 
 #### Jira projects
 
-With `projects` set, the adapter runs two queries per poll:
+With `projects` set, the adapter runs these queries per poll:
 
 - assigned to me: `project in (...) AND assignee = currentUser() AND statusCategory != Done`
-  (written to `items`);
-- to pick up: `project in (...) AND assignee is EMPTY AND statusCategory = "To Do" AND sprint in openSprints()`
-  (written to `pick_up`). A project with no sprints contributes nothing; a
-  failed query is listed in `errors` and the rest of the file is kept.
+  (written to `items`, at most `maxResults`);
+- in progress, counted: `... AND assignee = currentUser() AND statusCategory = "In Progress"`
+  (written to `in_progress_total`);
+- to pick up, in the pick-up projects (`pickUpProjects`, default
+  `projects`): `project in (...) AND assignee is EMPTY AND statusCategory = "To Do" AND sprint in openSprints()`
+  (written to `pick_up`, at most 50, with the count in `pick_up_total`). A
+  project with no sprints contributes nothing; a failed query is listed in
+  `errors` and the rest of the file is kept.
 
-The project list can be changed without a rebuild or restart:
+The search endpoint (`/rest/api/3/search/jql`) reports no total, so the
+counts come from `/rest/api/3/search/approximate-count`; the sidebar shows
+those, never the fetch cap.
+
+Both project lists can be changed without a rebuild or restart:
 
 ```bash
-decknix hub jira-projects                # show the current override
-decknix hub jira-projects ABC XYZ        # or ABC,XYZ; written to settings.toml
-decknix hub jira-projects --clear        # back to the Nix-configured list
+decknix hub jira-projects                     # show the current override
+decknix hub jira-projects ABC XYZ             # or ABC,XYZ; written to settings.toml
+decknix hub jira-projects --clear             # back to the Nix-configured list
+decknix hub jira-projects --pick-up ABC       # pick-up projects ([hub.jira] pick_up_projects)
+decknix hub jira-projects --pick-up --clear   # pick up from `projects` again
 ```
 
 That edits `[hub.jira] projects` in `~/.config/decknix/settings.toml`
@@ -211,6 +221,7 @@ expired, run kargo login --sso`; hover for every repo's error.
 | `decknix.services.hub.jira.apiTokenFile` | `~/.config/decknix/local/jira-token` | Path to Jira API token file |
 | `decknix.services.hub.jira.projects` | `[]` | Jira project keys for the Tasks section; overridden at runtime by `[hub.jira] projects` in `~/.config/decknix/settings.toml` (see below) |
 | `decknix.services.hub.jira.pickUp` | `true` | Also list unassigned To Do issues in open sprints |
+| `decknix.services.hub.jira.pickUpProjects` | `[]` | Projects to pick up from; empty means `projects`; overridden by `[hub.jira] pick_up_projects` |
 | `decknix.services.hub.jira.project` | `""` | Legacy single project key, used only when `projects` is empty |
 | `decknix.services.hub.jira.statuses` | `["Ready" "In Progress" "Blocked" "Code Review"]` | Statuses for the legacy single-project query only |
 | `decknix.services.hub.jira.interval` | `120` | Seconds between polls |
@@ -281,18 +292,23 @@ What there is to do, in four collapsible groups, each capped at
 `decknix-sidebar-tasks-per-group` rows (default 5) with the rest named:
 
 ```
- Tasks (14)
- ▾ In progress (6)
+ Tasks (82)
+ ▾ In progress (12)                        ← the true total, not the fetch cap
    ● ABC-1610 Ship the importer            ← a live session works it
    · ABC-1588 Tidy the schema              ← colour: amber doing, purple review, red blocked
-     … 1 more
- ▾ To pick up (5)
+     … 10 more
+ ▾ To pick up (64)
    · XYZ-42 Rotate the key                 ← unassigned To Do in an open sprint
  ▾ Chores (2)
    ◦ 4 Renew the certificate
  ▾ Issues (1)
    · widget#12 Fix the flaky test
 ```
+
+In progress is the Jira status category In Progress only (To Do and Done
+are left out). A Jira group's count is the hub's total, so `… N more`
+counts everything not listed; listing them all (`RET`) shows what was
+fetched and ends with `… N more in Jira` for the rest.
 
 A session works a key when the key is in its name or tags, or in the title or
 branch of a PR it owns; those rows come first. `RET` on a Jira row opens the
@@ -373,7 +389,7 @@ All state is stored in `~/.config/decknix/hub/`:
 |------|---------|
 | `github-reviews.json` | PR reviews needing your attention (per-PR attention signals — `my_review`, `others_reviewed`, `re_requested`, `comment_mentioned`, `review_stale`, `review_decision` — drive the sidebar's [reviewed filter](../modules/ai/agent-shell/layouts/requests.md#the-reviewed-filter-r)) |
 | `github-wip.json` | Your open PRs, and merged ones within `mergedRetentionDays`, with CI status and branches. `state` is upper case (`OPEN`, `MERGED`). `errors` lists queries that failed this poll without failing it |
-| `jira-tasks.json` | Jira issues assigned to you and not Done (`items`), to pick up (`pick_up`), the `projects` used, and `errors` |
+| `jira-tasks.json` | Jira issues assigned to you and not Done (`items`), to pick up (`pick_up`), their true counts (`in_progress_total`, `pick_up_total`), the `projects` and `pick_up_projects` used, and `errors` |
 | `github-issues.json` | Open GitHub issues assigned to you |
 | `task-chores.json` | Pending Taskwarrior chores |
 | `teamcity-builds.json` | TeamCity build status for WIP branches |
