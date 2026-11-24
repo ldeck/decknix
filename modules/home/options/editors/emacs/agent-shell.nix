@@ -7597,6 +7597,9 @@ duration -- the most important number on this branch."
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "h") (lambda () (interactive)
                       (decknix--sidebar-call-transient #'decknix-sidebar-transient)))
+        ;; L = what every glyph and colour means
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "L") #'decknix-sidebar-legend)
         ;; D = cycle hub display layout (A full → B scoped → C label → D minimal)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "D") #'decknix-sidebar-toggle-hub-display-mode)

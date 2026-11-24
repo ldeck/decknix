@@ -302,6 +302,14 @@ reduced to a count."
   (should (memq #'decknix-sidebar-layout-setup-buffer
                 (default-value 'agent-shell-workspace-sidebar-mode-hook))))
 
+(ert-deftest decknix-layout-render--the-legend-names-every-glyph ()
+  (let ((text (decknix-sidebar-legend-text)))
+    (dolist (g '("Ω" "π" "◐" "●" "■" "✓" "⊖" "↻" "!" "◆N" "↩" "‥N" "i" "β" "." "@" "~"
+                 "⇢" "→" "·" "✗" "?" "⚑" "⑂" "⇡" "✓none"))
+      (should (string-match-p (concat "^ *" (regexp-quote g) " ") text)))
+    (dolist (c '("red" "amber" "green" "grey" "plain" "purple"))
+      (should (string-match-p c text)))))
+
 (ert-deftest decknix-layout-render--a-review-worktree-row-names-its-pr ()
   (let ((out (decknix-lr-test--render-dormant
               (list :worktrees (list (list :branch "dfebdad" :dirty t :repo "o/r"
@@ -1101,7 +1109,7 @@ hides one silently; Reviews and WIP list only the board's sessions."
         (should (string-match-p "▸ run the tests" (nth (+ 1 row) lines)))
         (should (string-match-p "next: open the PR" (nth (+ 2 row) lines)))
         (let ((pos (string-match "▸ run" out)))
-          (should (equal '(:foreground "#d7af5f") (get-text-property pos 'face out)))
+          (should (eq 'default (get-text-property pos 'face out)))
           (should (eq (get-buffer "*Claude: dk-plan*")
                       (with-temp-buffer (insert out) (decknix-layout-buffer-at (1+ pos)))))
           (should-not (with-temp-buffer (insert out) (decknix-layout-actionable-p (1+ pos)))))))))

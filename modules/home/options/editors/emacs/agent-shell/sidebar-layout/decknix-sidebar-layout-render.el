@@ -1054,11 +1054,12 @@ merged PRs from their deploy stage."
   :group 'decknix-ship)
 
 (defconst decknix-sidebar-item-line-faces
-  '((doing   . (:foreground "#d7af5f"))
+  '((doing   . default)
     (blocked . (:foreground "#ff5f5f"))
     (done    . (:foreground "#87af87"))
     (next    . (:foreground "#5f87af")))
-  "Faces for the current and next lines under an item.")
+  "Faces for the current and next lines under an item.
+Plain in progress, red blocked, green done, dim blue for what comes next.")
 
 (defun decknix--layout-item-line (lead text kind width &rest props)
   "Return LEAD and TEXT as one line fitted to WIDTH in KIND's face.
@@ -1772,6 +1773,68 @@ costs no network; an absent file renders nothing rather than a guess."
             (insert (propertize line 'decknix-layout-quota account) "\n")
             (setq line-num (1+ line-num)))))))
   line-num)
+
+;; --- legend -------------------------------------------------------------
+
+(defconst decknix-sidebar-legend
+  '(("Colours"
+     ("red" "failed or blocked: a stage failed, a conflict, changes requested")
+     ("amber" "waiting on you: promote, reply, review, close a ticket")
+     ("green" "shipped, done, approved")
+     ("grey" "quiet or unknown: nothing wanted, a guess, an unreadable feed")
+     ("plain" "moving on its own: an agent working, a deploy rolling")
+     ("purple" "a session blocked on you (tabs and Requests share it)"))
+    ("Sessions"
+     ("⚑" "blocked on you: asking, waiting, failed, flagged")
+     ("◐" "working")
+     ("●" "done or ready")
+     ("◌" "closing")
+     ("~" "placed or claimed by a guess from its name or tags")
+     ("?" "evidence not gathered yet (beside a repo); stage unknown (in a badge)"))
+    ("PR rows"
+     ("Ω" "a human's PR (bold purple: a bot's PR a human has committed to)")
+     ("π" "a bot's PR")
+     ("◐" "draft")
+     ("●" "open")
+     ("■" "merged or closed")
+     ("✓" "approved, nothing blocking")
+     ("⊖" "a reviewer is waiting on your changes")
+     ("↻" "re-review owed: changes made, or approval made stale by a push")
+     ("!" "merge conflict")
+     ("◆N" "N unresolved human threads")
+     ("‥N" "N resolved threads")
+     ("↩" "the last word is someone else's: a reply owed (open PRs only)")
+     ("i" "a human replied to you (bold) or left something open")
+     ("β" "a bot replied to you (bold) or bot activity is pending")
+     ("." "you replied and left the thread open: waiting on them"))
+    ("Deploy badges"
+     ("✓" "stage done: ✓prd shipped there; +2✓ two more regions done")
+     ("⇢" "ready for you to promote")
+     ("→" "deploying or verifying")
+     ("·" "waiting for a stage that follows by itself")
+     ("✗" "failed")
+     ("?" "stage unknown: the deploy feed is unreadable")
+     ("✓none" "no deploy needed: the merge changes no runtime file"))
+    ("Groups and repos"
+     ("⇡" "a repo a session is working in")
+     ("@" "a human's PR waiting for review (Reviews)")
+     ("⑂" "orphaned worktrees: branch gone from origin")
+     ("·" "nothing waiting; also separates fields")))
+  "Sections of (GLYPH MEANING) shown by `decknix-sidebar-legend'.")
+
+(defun decknix-sidebar-legend-text ()
+  "Return the glyph and colour legend as text."
+  (mapconcat (lambda (section)
+               (concat (car section) "\n"
+                       (mapconcat (lambda (e) (format "  %-6s %s" (car e) (cadr e)))
+                                  (cdr section) "\n")))
+             decknix-sidebar-legend "\n\n"))
+
+(defun decknix-sidebar-legend ()
+  "Show what each sidebar glyph and colour means."
+  (interactive)
+  (with-help-window "*Sidebar Legend*"
+    (princ (decknix-sidebar-legend-text))))
 
 ;; --- the session you are looking at ------------------------------------
 

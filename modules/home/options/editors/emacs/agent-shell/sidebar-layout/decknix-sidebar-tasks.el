@@ -53,13 +53,14 @@
   "A Jira key, in any case: session tags are lower case.")
 
 (defconst decknix-sidebar-tasks-faces
-  '((doing   . (:foreground "#d7af5f"))
-    (review  . (:foreground "#c678dd"))
+  '((doing   . default)
+    (review  . default)
     (blocked . (:foreground "#ff5f5f"))
-    (todo    . (:foreground "#5f87af"))
+    (todo    . font-lock-comment-face)
     (done    . (:foreground "#87af87"))
     (quiet   . font-lock-comment-face))
-  "Face per task state.")
+  "Face per task state, on the sidebar's scale: red blocked, green done,
+grey not started, plain in progress or in review.")
 
 (defun decknix--tasks-keys-in (strings)
   "Return the Jira keys in STRINGS, upper-cased, without duplicates."

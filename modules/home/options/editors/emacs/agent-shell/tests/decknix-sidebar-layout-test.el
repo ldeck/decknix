@@ -875,10 +875,13 @@ tests \"passed\" the code it was meant to exercise."
     (list :number 1 :branch "b" :repo "o/r" :pr (nreverse alist))))
 
 (ert-deftest decknix-layout--every-session-state-has-a-face ()
-  "A state rendering in `default' is a state the user cannot see."
-  (dolist (state '("netfail" "waiting" "asking" "working" "finished"
-                   "ready" "closing"))
-    (should-not (eq 'default (decknix--layout-state-face state)))))
+  "A state rendering in `default' is a state the user cannot see, except
+working: plain by design, so amber means only `waiting on you'; its `◐'
+and its `work' word say it."
+  (dolist (state '("netfail" "waiting" "asking" "finished" "ready" "closing"))
+    (should-not (eq 'default (decknix--layout-state-face state))))
+  (should (equal "◐" (decknix--layout-state-glyph "working")))
+  (should (equal "work" (decknix--layout-state-short "working"))))
 
 (ert-deftest decknix-layout--unknown-state-falls-back-not-errors ()
   (should (eq 'default (decknix--layout-state-face "banana")))
@@ -888,8 +891,7 @@ tests \"passed\" the code it was meant to exercise."
   "One face for blocked-on-you, shared with the Requests indicator, so a
 colour cannot mean one thing in the sidebar and another on a Request row."
   (dolist (state '("netfail" "waiting" "asking"))
-    (should (eq 'decknix-attention-face (decknix--layout-state-face state))))
-  (should (plist-get (decknix--layout-state-face "working") :foreground)))
+    (should (eq 'decknix-attention-face (decknix--layout-state-face state)))))
 
 (ert-deftest decknix-layout--a-blocked-review-group-uses-the-attention-face ()
   (should (eq 'decknix-attention-face
@@ -1556,6 +1558,27 @@ repos holding eight bot PRs awaiting review looked like nothing at all."
   (should (eq 'asking (decknix--layout-group-state
                        '(:asking 1 :uncovered 2
                          :prs ((:item ((review_decision . "CHANGES_REQUESTED")))))))))
+
+(ert-deftest decknix-layout--colours-mean-one-thing-each ()
+  "Red failed or blocked, amber waiting on you, green done, grey quiet or
+unknown; work moving on its own is plain, so amber is only ever you."
+  (let ((amber "#ffaf5f") (red "#ff5f5f") (green "#87af87"))
+    (should (equal red (plist-get (decknix--layout-severity-face 0) :foreground)))
+    (should (equal amber (plist-get (decknix--layout-severity-face 1) :foreground)))
+    (should (eq 'default (decknix--layout-severity-face 2)))
+    (should (equal green (plist-get (decknix--layout-severity-face 3) :foreground)))
+    (should (equal '(:inherit font-lock-comment-face) (decknix--layout-severity-face 4)))
+    (should (eq 'default (decknix--layout-state-face "working")))
+    ;; PRs waiting for my review are waiting on me.
+    (should (equal amber (plist-get (decknix--layout-group-face '(:uncovered 2)) :foreground)))
+    (should (equal amber (plist-get (decknix--layout-group-face '(:updated 1)) :foreground)))
+    (should (eq 'default (decknix--layout-group-face '(:doing 1))))
+    (dolist (cell '((deploying . default) (verifying . default) (pending . default)
+                    (unknown . shadow)))
+      (should (eq (cdr cell) (cdr (alist-get (car cell) decknix-ship-state-tokens)))))
+    (should (equal amber (plist-get (cdr (alist-get 'ready decknix-ship-state-tokens)) :foreground)))
+    (should (equal red (plist-get (cdr (alist-get 'failed decknix-ship-state-tokens)) :foreground)))
+    (should (equal green (plist-get (cdr (alist-get 'done decknix-ship-state-tokens)) :foreground)))))
 
 (ert-deftest decknix-layout--a-repo-merely-being-worked-is-amber-not-green ()
   (should (eq 'doing (decknix--layout-group-state

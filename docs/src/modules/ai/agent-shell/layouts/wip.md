@@ -59,7 +59,7 @@ what comes next:
 
 ```
  ◐  hx-1610/fix-the-thing                working
-      ▸ run the integration tests             ← amber: in progress
+      ▸ run the integration tests             ← plain: in progress
       next: open the PR                       ← dim blue
     ■ ⇢prd #812 HX-1610 add the thing     ← ready: the badge says promote
     ■ →prd #813 HX-1611 another thing
@@ -127,11 +127,12 @@ stage is verified, then shows dimmed as `shipped` for the shipped-retention
 window, then drops. In place of its age the row shows the stage:
 
 ```
-    ■ →stg  #812 HX-1610 add the thing     deploying or verifying stg (amber)
-    ■ ⇢prd  #812 ...                       ready for a person to promote (orange)
-    ■ ·prd  #812 ...                       waiting for prd, which follows by itself (amber)
+    ■ →stg  #812 HX-1610 add the thing     deploying or verifying stg (plain)
+    ■ ⇢prd  #812 ...                       ready for you to promote (amber)
+    ■ ·prd  #812 ...                       waiting for prd, which follows by itself (plain)
     ■ ✗test #812 ...                       failed at test (red)
     ■ merged #90 docs tweak                nothing to deploy (green)
+    ■ US?   #812 ...                       stage unknown: Kargo unreadable (grey)
     ■ shipped #77 ...                      shipped, dimmed until retention ends
 ```
 

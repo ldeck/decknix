@@ -261,6 +261,7 @@ narrows; `?` is always the last to go, and opens the full reference.
 | `G` | Repo-sync action for the row at point |
 | `T` | Toggles |
 | `?` / `h` | Every sidebar key |
+| `L` | Glyph and colour legend |
 
 ## Session URLs
 

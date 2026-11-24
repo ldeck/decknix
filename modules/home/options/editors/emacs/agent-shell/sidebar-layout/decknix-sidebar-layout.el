@@ -1295,8 +1295,9 @@ the order ROWS came in."
     ("waiting"  . decknix-attention-face)
     ("asking"   . decknix-attention-face)
     ("updated"  . decknix-attention-face)
-    ;; Yellow for in-progress, matching a building PR.
-    ("working"  . (:foreground "#d7af5f"))
+    ;; Plain while it works: it wants nothing from you, and amber now
+    ;; means only that something does.
+    ("working"  . default)
     ;; Green for complete, matching a passing build.
     ("finished" . (:foreground "#87af87"))
     ("ready"    . (:foreground "#87af87"))
@@ -1315,12 +1316,19 @@ row indicator, so the two cannot disagree about what a colour means.")
 ;; children, which is how one line can stand in for several without hiding a
 ;; problem.
 (defconst decknix-sidebar-layout-severity-faces
-  '((0 . (:foreground "#ff5f5f" :weight bold))   ; blocked
-    (1 . (:foreground "#ffaf5f" :weight bold))   ; wants me
-    (2 . (:foreground "#d7af5f"))                ; in flight
-    (3 . (:foreground "#87af87"))                ; green
-    (4 . (:inherit font-lock-comment-face)))     ; muted
-  "Face per severity rank.")
+  '((0 . (:foreground "#ff5f5f" :weight bold))   ; red: failed or blocked
+    (1 . (:foreground "#ffaf5f" :weight bold))   ; amber: waiting on you
+    (2 . default)                                ; plain: moving on its own
+    (3 . (:foreground "#87af87"))                ; green: shipped, done, approved
+    (4 . (:inherit font-lock-comment-face)))     ; grey: quiet or unknown
+  "Face per severity rank.
+
+One meaning per colour across repo headers, rows, folds and the ship
+queue: red failed or blocked, amber waiting on you, green shipped or
+done, grey quiet or unknown.  Work in flight is plain: it had been a
+yellow barely distinguishable from the amber that asks something of
+you.  A session blocked on you keeps `decknix-attention-face' (purple),
+shared with the tabs.")
 
 (defun decknix--layout-severity-face (rank)
   "Return the face for severity RANK."
@@ -1979,18 +1987,18 @@ the section rendered `default\=' unless something was already shouting."
 
 (defconst decknix-sidebar-layout-group-faces
   '((asking  . decknix-attention-face)
-    (updated . (:foreground "#5fafd7" :weight bold))
+    (updated . (:foreground "#ffaf5f" :weight bold))
     (blocked . error)
-    (new     . (:foreground "#87af87"))
-    (doing   . (:foreground "#d7af5f"))
+    (new     . (:foreground "#ffaf5f"))
+    (doing   . default)
     (responded . font-lock-comment-face))
-  "Face per Reviews group state.
+  "Face per Reviews group state, on the sidebar's one-meaning-per-colour scale.
 
-Green for work waiting on a reviewer, amber for a session mid-flight,
-`decknix-attention-face' for one blocked on the user, red for a PR that
-cannot proceed.  Nothing in the
-section was coloured before unless a session was blocked, so a repo with
-PRs waiting read as inert.")
+Amber for PRs waiting on my review (new, or moved since I reviewed),
+plain for a session mid-flight, `decknix-attention-face' for one
+blocked on the user, red for a PR that cannot proceed, grey for work
+already reviewed.  Nothing in the section was coloured before unless a
+session was blocked, so a repo with PRs waiting read as inert.")
 
 (defun decknix--layout-group-face (group)
   "Return the face for GROUP\='s row."

@@ -295,10 +295,10 @@ What there is to do, in four collapsible groups, each capped at
  Tasks (82)
  ▾ In progress (12)                        ← the true total, not the fetch cap
    ● ABC-1610 Ship the importer            ← a live session works it
-   · ABC-1588 Tidy the schema              ← colour: amber doing, purple review, red blocked
+   · ABC-1588 Tidy the schema              ← colour: plain in progress, red blocked
      … 10 more
  ▾ To pick up (64)
-   · XYZ-42 Rotate the key                 ← unassigned To Do in an open sprint
+   · XYZ-42 Rotate the key                 ← unassigned To Do in an open sprint (grey)
  ▾ Chores (2)
    ◦ 4 Renew the certificate
  ▾ Issues (1)

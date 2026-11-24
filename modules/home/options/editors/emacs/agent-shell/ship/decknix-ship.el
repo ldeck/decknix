@@ -564,11 +564,12 @@ treated as shipped just now, so it is seen at least once."
   '((done      . ("✓" . (:foreground "#87af87")))
     (failed    . ("✗" . (:foreground "#ff5f5f" :weight bold)))
     (ready     . ("⇢" . (:foreground "#ffaf5f" :weight bold)))
-    (deploying . ("→" . (:foreground "#d7af5f")))
-    (verifying . ("→" . (:foreground "#d7af5f")))
-    (pending   . ("·" . (:foreground "#d7af5f")))
+    (deploying . ("→" . default))
+    (verifying . ("→" . default))
+    (pending   . ("·" . default))
     (unknown   . ("?" . shadow)))
-  "Glyph and face per ship state.")
+  "Glyph and face per ship state: red failed, amber waiting on you,
+green done, grey unknown, plain moving on its own.")
 
 (defun decknix-ship--token (status)
   "Return STATUS's stage token, prefixed by its region, propertized."
@@ -590,8 +591,8 @@ treated as shipped just now, so it is seen at least once."
 (defun decknix-ship-label (status)
   "Return the compact stage token for STATUS, propertized.
 
-  ✓prd    shipped (green)          →stg   deploying or verifying stg (amber)
-  ✗test   failed at test (red)     ·dev   waiting for dev (amber)
+  ✓prd    shipped (green)          →stg   deploying or verifying stg (plain)
+  ✗test   failed at test (red)     ·dev   waiting for dev to follow (plain)
   ⇢prd    ready for you to promote merged  nothing to deploy (green)
   ?       stage unknown: the deploy feed is unreadable (grey)
   ✓none   no deploy needed: the merge changes no runtime file (green)

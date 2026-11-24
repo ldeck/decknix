@@ -1381,7 +1381,8 @@ they mean in the sidebar itself (cycle layout / worktree menu)."
    :if decknix-sidebar--support-views-p
    ("z d" "Dashboard (DoS + alerts)"    decknix-support-dashboard)
    ("z w" "Workflow (what to do, when)" decknix-support-workflow)]
-  ["" ("T" "Toggles…"     decknix-sidebar-toggles-transient)])
+  ["" ("T" "Toggles…"     decknix-sidebar-toggles-transient)
+      ("L" "Glyph and colour legend" decknix-sidebar-legend)])
 
 ;; -- Enhanced sidebar render: live + saved sessions + key footer --
 ;; Override the upstream render to add saved sessions grouped by
