@@ -30,7 +30,7 @@ is not recoverable.
 
 Attention still outranks everything ELSE: `stale' and `answered' are
 statements about the PR, not about whether the agent is stuck."
-  (should (eq 'finished (decknix-review-board--lane t t 'gone nil)))
+  (should (eq 'obsolete (decknix-review-board--lane t t 'gone nil)))
   (should (eq 'needs-you (decknix-review-board--lane t t nil t)))
   (should (eq 'needs-you (decknix-review-board--lane t t 'stale nil)))
   (should (eq 'needs-you (decknix-review-board--lane t t 'answered nil))))
@@ -60,10 +60,10 @@ review nobody has looked at."
   (should-not (decknix-review-board--row-face nil 'answered))
   (should-not (decknix-review-board--row-face nil 'gone)))
 
-(ert-deftest decknix-rb--gone-session-is-finished ()
-  "A session whose PR left the queue is finished work, whoever wrote it."
-  (should (eq 'finished (decknix-review-board--lane t nil 'gone nil)))
-  (should (eq 'finished (decknix-review-board--lane t nil 'gone t))))
+(ert-deftest decknix-rb--gone-session-is-obsolete ()
+  "A session whose PR left the queue is obsolete, whoever wrote it."
+  (should (eq 'obsolete (decknix-review-board--lane t nil 'gone nil)))
+  (should (eq 'obsolete (decknix-review-board--lane t nil 'gone t))))
 
 (ert-deftest decknix-rb--any-live-session-is-doing ()
   "A live session not blocked and not gone is `doing', whoever authored it.
@@ -115,21 +115,21 @@ request has nothing to fold into, so it stays individual."
     (should (= 90 (plist-get row :priority)))
     (should (eq 'group (plist-get row :kind)))))
 
-(ert-deftest decknix-rb--partly-merged-group-is-not-finished ()
+(ert-deftest decknix-rb--partly-merged-group-is-not-obsolete ()
   "A group with one live member is still work.
-Filing it under `finished' would invite quitting a session that still
-has a PR under it."
+Filing it under `obsolete' would invite quitting a session that still
+has a PR under it.  Stopped with nothing asked, it is `stalled'."
   (let ((row (decknix-review-board--session-row
               '(:name "g" :prs ("a#1" "a#3") :state "ready" :bot-p t)
               #'decknix-rb-test--status #'decknix-rb-test--priority)))
-    (should (eq 'doing (plist-get row :lane)))))
+    (should (eq 'stalled (plist-get row :lane)))))
 
-(ert-deftest decknix-rb--fully-merged-group-is-finished ()
+(ert-deftest decknix-rb--fully-merged-group-is-obsolete ()
   "Every member gone means the session has nothing left to do."
   (let ((row (decknix-review-board--session-row
               '(:name "g" :prs ("a#1" "a#2") :state "ready" :bot-p t)
               #'decknix-rb-test--status #'decknix-rb-test--priority)))
-    (should (eq 'finished (plist-get row :lane)))))
+    (should (eq 'obsolete (plist-get row :lane)))))
 
 ;; --- the union of feed and sessions ---
 
@@ -146,7 +146,7 @@ nothing to do."
                  '((:name "s" :prs ("a#1") :state "ready" :bot-p nil))
                  #'decknix-rb-test--key #'decknix-rb-test--status
                  #'decknix-rb-test--priority #'decknix-rb-test--bot)))
-    (should (= 1 (length (alist-get 'finished model))))))
+    (should (= 1 (length (alist-get 'obsolete model))))))
 
 (ert-deftest decknix-rb--request-without-a-session-is-idle ()
   "A request precedes its session, so the feed contributes rows too."
@@ -192,9 +192,10 @@ would reappear as idle rows and invite a second dispatch."
 
 (ert-deftest decknix-rb--lane-order-is-fixed ()
   "Lifecycle order: blocked on you, then updated since your review, then
-in progress, then waiting on the author, then done, then the un-started
-backlog.  The lanes you clear stay high, not buried."
-  (should (equal '(needs-you rereview doing on-hold finished grouped idle)
+stopped without asking, then in progress, then waiting on others, then
+done (posted, then obsolete), then the un-started backlog.  The lanes you
+clear stay high, not buried."
+  (should (equal '(needs-you rereview stalled doing on-hold posted obsolete grouped idle)
                  (mapcar #'car decknix-review-board-lanes))))
 
 (ert-deftest decknix-rb--rows-sort-by-priority-within-a-lane ()
@@ -398,13 +399,13 @@ way merges it without the round that would have caught a regression."
 ;; --- the activity lane carries verb and progress -----------------------
 
 (ert-deftest decknix-rb--doing-lane-exists-and-sits-after-needs-you ()
-  "`doing' is a lane, ordered between `needs-you' and `finished'."
+  "`doing' is a lane, ordered between `needs-you' and `posted'."
   (let ((lanes (mapcar #'car decknix-review-board-lanes)))
     (should (memq 'doing lanes))
     (should (< (seq-position lanes 'needs-you)
                (seq-position lanes 'doing)))
     (should (< (seq-position lanes 'doing)
-               (seq-position lanes 'finished)))))
+               (seq-position lanes 'posted)))))
 
 (ert-deftest decknix-rb--session-row-carries-verb-and-progress ()
   "A session's activity verb and progress ride on its row for the renderer."
@@ -419,7 +420,7 @@ way merges it without the round that would have caught a regression."
 (ert-deftest decknix-rb--session-row-tolerates-absent-verb-and-progress ()
   "A session with no dispatched verb or plan still builds a doing row."
   (let ((row (decknix-review-board--session-row
-              '(:name "n" :prs ("a#3") :state "ready" :bot-p nil)
+              '(:name "n" :prs ("a#3") :state "working" :bot-p nil)
               #'decknix-rb-test--status #'decknix-rb-test--priority)))
     (should-not (plist-get row :verb))
     (should-not (plist-get row :progress))
@@ -447,26 +448,29 @@ way merges it without the round that would have caught a regression."
   (should-not (decknix-review-board-activity-verb nil)))
 
 
-;; --- auto-dismiss drops finished rows ---------------------------------
+;; --- auto-dismiss drops obsolete rows ---------------------------------
 
-(ert-deftest decknix-rb--drop-finished-empties-that-lane-only ()
-  "Auto-dismiss drops finished rows and touches nothing else."
+(ert-deftest decknix-rb--drop-finished-empties-the-obsolete-lane-only ()
+  "Auto-dismiss drops merged or closed PRs' rows and touches nothing else.
+A posted review stays: its PR is still open."
   (let* ((model '((needs-you . (r1))
                   (doing     . (r2 r3))
-                  (finished  . (r4 r5))
+                  (posted    . (r7))
+                  (obsolete  . (r4 r5))
                   (grouped   . (r6))
                   (idle      . nil)))
          (out (decknix-review-board-drop-finished model)))
-    (should-not (alist-get 'finished out))
+    (should-not (alist-get 'obsolete out))
+    (should (equal '(r7) (alist-get 'posted out)))
     (should (equal '(r1) (alist-get 'needs-you out)))
     (should (equal '(r2 r3) (alist-get 'doing out)))
     (should (equal '(r6) (alist-get 'grouped out)))))
 
 (ert-deftest decknix-rb--drop-finished-keeps-the-lane-present ()
   "The lane stays (empty) so its screen position is learnable."
-  (let ((out (decknix-review-board-drop-finished '((finished . (r1))))))
-    (should (assq 'finished out))
-    (should-not (alist-get 'finished out))))
+  (let ((out (decknix-review-board-drop-finished '((obsolete . (r1))))))
+    (should (assq 'obsolete out))
+    (should-not (alist-get 'obsolete out))))
 
 
 ;; --- initiating a review from a pasted url ---------------------------
@@ -582,7 +586,7 @@ exists -- telling me the analysis is void is more useful."
 
 (ert-deftest decknix-rb--a-reviewed-row-leaves-the-active-lanes ()
   "An approved PR sat in `doing\=' as though still mid-flight."
-  (should (eq 'finished (decknix-review-board--lane t nil 'reviewed nil))))
+  (should (eq 'posted (decknix-review-board--lane t nil 'reviewed nil))))
 
 (ert-deftest decknix-rb--a-blocked-session-still-wants-me-after-my-review ()
   "My approving the PR does not answer whatever the agent is asking."
@@ -620,7 +624,7 @@ your time yet."
   (should (eq 'on-hold (decknix-review-board--lane t t 'draft nil))))
 
 (ert-deftest decknix-rb--merged-still-outranks-draft ()
-  (should (eq 'finished (decknix-review-board--lane t t 'gone nil))))
+  (should (eq 'obsolete (decknix-review-board--lane t t 'gone nil))))
 
 (ert-deftest decknix-rb--a-draft-with-no-session-stays-where-it-was ()
   "On hold is about a session; an undispatched request keeps its lane."
@@ -685,7 +689,7 @@ your time yet."
 (ert-deftest decknix-rb--phase-blocks-pass-through ()
   (should (eq 'waiting (decknix-review-board-phase "waiting" nil nil nil)))
   (should (eq 'netfail (decknix-review-board-phase "netfail" nil nil nil)))
-  (should (eq 'idle (decknix-review-board-phase "ready" nil nil nil)))
+  (should (eq 'stalled (decknix-review-board-phase "ready" nil nil nil)))
   (should (eq 'idle (decknix-review-board-phase "closing" nil nil nil))))
 
 (ert-deftest decknix-rb--phase-detail-names-verdict-and-reply ()
@@ -725,15 +729,15 @@ In progress.  Its row now lands in Needs you, saying what it wants."
     (should (eq 'doing (plist-get posting :lane)))
     (should (eq 'actioned (plist-get posting :phase)))))
 
-(ert-deftest decknix-rb--a-posted-review-is-finished ()
-  "Filed with finished work as soon as the session reports it, not when
+(ert-deftest decknix-rb--a-posted-review-is-in-posted ()
+  "Filed with posted work as soon as the session reports it, not when
 the feed next notices."
   (let ((row (decknix-review-board--session-row
               (list :name "pr-1" :prs '("b#9") :state "asking"
                     :ask (decknix-rb-test--ask decknix-fixture-posted-then-asks)
                     :posted t)
               #'decknix-rb-test--status #'decknix-rb-test--priority)))
-    (should (eq 'finished (plist-get row :lane)))
+    (should (eq 'posted (plist-get row :lane)))
     (should (eq 'posted (plist-get row :phase)))))
 
 (ert-deftest decknix-rb--phase-settled-after-a-go-ahead-without-a-link ()
@@ -799,6 +803,129 @@ the feed next notices."
           (should (= 1 built)))
       (setq decknix-review-board--stale nil)
       (kill-buffer board))))
+
+;; --- what a stopped session is: crashed, stalled, or handed off --------
+
+(ert-deftest decknix-rb--a-session-that-died-on-the-link-is-netfail ()
+  "Its last message is a network failure: netfail, in Needs you.
+The observed case: three review sessions whose first prompt failed on
+ENOTFOUND read as idle, because no turn ever completed to flag them."
+  (let ((row (decknix-review-board--session-row
+              '(:name "s" :prs ("a#3") :state "ready"
+                :netfail "API Error: Can't reach the API server (ENOTFOUND)")
+              #'decknix-rb-test--status #'decknix-rb-test--priority)))
+    (should (eq 'netfail (plist-get row :phase)))
+    (should (eq 'needs-you (plist-get row :lane)))
+    (should (equal "y resets and resumes" (plist-get row :phase-detail)))
+    (should (= 0 (decknix-review-board-row-rank row)))))
+
+(ert-deftest decknix-rb--netfail-text-never-overrides-a-live-turn ()
+  "A working session is working: an error line it quotes is not its death."
+  (should (eq 'assessing (decknix-review-board-phase
+                          "working" nil nil nil nil '(:netfail "x")))))
+
+(ert-deftest decknix-rb--a-posted-review-is-not-netfail ()
+  "Posted, then a follow-up failed: the review is still on GitHub."
+  (should (eq 'posted (decknix-review-board-phase
+                       "ready" nil t nil nil '(:netfail "x")))))
+
+(ert-deftest decknix-rb--a-stopped-session-that-asked-nothing-is-stalled ()
+  "Stalled has its own lane: Needs you keeps meaning it asked you."
+  (let ((row (decknix-review-board--session-row
+              '(:name "s" :prs ("a#3") :state "ready")
+              #'decknix-rb-test--status #'decknix-rb-test--priority)))
+    (should (eq 'stalled (plist-get row :phase)))
+    (should (eq 'stalled (plist-get row :lane)))
+    (should-not (plist-get row :attention))
+    (should (equal "y nudges it on" (plist-get row :phase-detail)))
+    (should (= 1 (decknix-review-board-row-rank row)))))
+
+(ert-deftest decknix-rb--a-handed-off-session-waits-on-others ()
+  "Handed to another reviewer: Waiting on others, grey, with the reason."
+  (let ((row (decknix-review-board--session-row
+              '(:name "s" :prs ("a#3") :state "ready" :handed-off "approved by jo")
+              #'decknix-rb-test--status #'decknix-rb-test--priority)))
+    (should (eq 'handed-off (plist-get row :phase)))
+    (should (eq 'on-hold (plist-get row :lane)))
+    (should (equal "approved by jo" (plist-get row :phase-detail)))
+    (should (= 4 (decknix-review-board-row-rank row)))))
+
+(ert-deftest decknix-rb--a-question-outranks-a-hand-off ()
+  "A session asking you is still asking, whoever else approved."
+  (should (eq 'awaiting
+              (decknix-review-board-phase
+               "asking" (decknix-rb-test--ask decknix-fixture-gate-choose-one)
+               nil nil nil '(:handed-off "approved by jo")))))
+
+(ert-deftest decknix-rb--waiting-on-others-is-the-renamed-on-hold ()
+  (should (equal "Waiting on others" (alist-get 'on-hold decknix-review-board-lanes))))
+
+(ert-deftest decknix-rb--handed-off-from-the-closing-message ()
+  (dolist (text '("Handed off to Jo; nothing more for me here."
+                  "I'll leave this to the other reviewer."
+                  "Waiting on another reviewer before I post."
+                  "Deferring to Sam, who owns this service."))
+    (should (equal "handed off" (decknix-review-board-handed-off text nil "me"))))
+  (should-not (decknix-review-board-handed-off
+               "Plan ready. Ready to submit? (yes / edit / cancel)" nil "me")))
+
+(ert-deftest decknix-rb--handed-off-from-another-approval ()
+  "Someone else approved and I have not reviewed: it is theirs now."
+  (should (equal "approved by jo"
+                 (decknix-review-board-handed-off
+                  nil '((approvers . ["jo"]) (my_review)) "me")))
+  (should-not (decknix-review-board-handed-off
+               nil '((approvers . ["jo"]) (my_review . "APPROVED")) "me"))
+  (should-not (decknix-review-board-handed-off nil '((approvers . ["me"])) "me"))
+  (should-not (decknix-review-board-handed-off nil nil "me")))
+
+(ert-deftest decknix-rb--a-merged-prs-question-is-moot ()
+  "No reply hints for a PR that no longer exists, and no attention."
+  (let ((row (decknix-review-board--session-row
+              (list :name "s" :prs '("a#1") :state "asking"
+                    :ask (decknix-rb-test--ask decknix-fixture-gate-choose-one))
+              #'decknix-rb-test--status #'decknix-rb-test--priority)))
+    (should (eq 'obsolete (plist-get row :lane)))
+    (should (equal "moot" (plist-get row :phase-detail)))
+    (should-not (plist-get row :attention))
+    (should (= 4 (decknix-review-board-row-rank row)))))
+
+(ert-deftest decknix-rb--palette-ranks ()
+  "Red failed, amber waiting on you, plain in flight, green done, grey quiet."
+  (dolist (case '((netfail . 0) (awaiting . 1) (asking . 1) (stalled . 1)
+                  (updated . 1) (assessing . 2) (revising . 2) (actioned . 2)
+                  (posted . 3) (handed-off . 4) (idle . 4)))
+    (should (= (cdr case)
+               (decknix-review-board-row-rank
+                (list :session t :lane 'doing :phase (car case)))))))
+
+(ert-deftest decknix-rb--done-lanes-sort-by-recency ()
+  "Posted and Obsolete read most recent first; priority means nothing there."
+  (let* ((model (decknix-review-board-build
+                 nil
+                 (list '(:name "old" :prs ("a#1") :state "ready" :since 100.0)
+                       '(:name "new" :prs ("a#2") :state "ready" :since 300.0)
+                       '(:name "mid" :prs ("x#5") :state "ready" :since 50.0))
+                 #'decknix-rb-test--key
+                 (lambda (k) (if (member k '("a#1" "a#2" "x#5")) 'gone nil))
+                 #'decknix-rb-test--priority #'decknix-rb-test--bot
+                 nil
+                 (lambda (k) (and (equal k "x#5") 200.0)))))
+    (should (equal '("new" "mid" "old")
+                   (mapcar (lambda (r) (plist-get r :name))
+                           (alist-get 'obsolete model))))))
+
+(ert-deftest decknix-rb--priority-ties-break-on-recency ()
+  (let ((rows (decknix-review-board--sort-lane
+               'doing (list '(:name "a" :priority 5 :activity 1.0)
+                            '(:name "b" :priority 5 :activity 9.0)
+                            '(:name "c" :priority 7 :activity 0.0)))))
+    (should (equal '("c" "b" "a") (mapcar (lambda (r) (plist-get r :name)) rows)))))
+
+(ert-deftest decknix-rb--stalled-is-counted-apart-from-needs-you ()
+  (let ((model '((needs-you . (r1)) (rereview . (r2)) (stalled . (r3 r4)))))
+    (should (= 2 (decknix-review-board-attention-count model)))
+    (should (= 2 (decknix-review-board-stalled-count model)))))
 
 (provide 'decknix-review-board-model-test)
 ;;; decknix-review-board-model-test.el ends here

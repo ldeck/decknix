@@ -37,13 +37,15 @@
 (require 'decknix-review-board-rereview)
 
 (defconst decknix-review-board-lane-help
-  '((needs-you . "agent is blocked on you")
+  '((needs-you . "asked you, or lost its link: answer or y")
     (rereview  . "author updated the PR since the review: R to re-review")
-    (doing     . "assessing, posting your answer, or idle")
-    (on-hold   . "PR back in draft — waiting on the author")
-    (finished  . "review posted, or PR merged or closed: safe to quit")
+    (stalled   . "stopped short of the gate without asking: y nudges it")
+    (doing     . "assessing, revising, or posting your answer")
+    (on-hold   . "PR in draft, or handed to another reviewer")
+    (posted    . "your review is on GitHub")
+    (obsolete  . "PR merged or closed: safe to quit")
     (grouped   . "bot PRs, folded per service")
-    (idle      . "no session yet — nobody is on these"))
+    (idle      . "no session yet: nobody is on these"))
   "One-line description per lane, rendered beside the heading.
 
 Without these the board reads as a list of sessions, and the two largest
@@ -54,19 +56,26 @@ stale sessions to clean up, which is the opposite of what they are.")
 (defconst decknix-review-board-lanes
   '((needs-you . "Needs you")
     (rereview  . "Re-review")
+    (stalled   . "Stalled")
     (doing     . "In progress")
-    (on-hold   . "On hold")
-    (finished  . "Finished")
+    (on-hold   . "Waiting on others")
+    (posted    . "Posted")
+    (obsolete  . "Obsolete")
     (grouped   . "Grouped")
     (idle      . "Idle"))
   "Ordered (LANE . HEADING) pairs, rendered top to bottom.
 
 The order tracks a review's lifecycle top to bottom: blocked on you,
-then updated since your review (it wants you again), then in flight,
-then done.  `doing' and `finished' sit high, not buried,
-because they are the lanes you clear -- a session you have actioned should
-be watchable, and a merged PR's session should be visible to dismiss
-rather than lost at the bottom.")
+then updated since your review (it wants you again), then stopped without
+asking (it wants a nudge), then in flight, then waiting on someone else,
+then done.  `posted' and `obsolete' sit above the backlog, not buried,
+because they are the lanes you clear.
+
+`stalled' is its own lane rather than part of Needs you so that Needs you
+keeps meaning one thing: the agent asked you something.  A session that
+simply stopped asked nothing.  `posted' and `obsolete' are split for the
+same reason: a review on GitHub and a PR that merged under its session are
+different outcomes, and one lane for both hid which was which.")
 
 (defconst decknix-review-board-attention-states '("waiting" "asking" "netfail")
   "Session states that mean the agent is blocked on the user.
@@ -82,6 +91,8 @@ is reset.")
 
 (defconst decknix-review-board-phases
   '((awaiting  . "verdict ready, waiting on your answer")
+    (stalled   . "stopped without posting or asking anything")
+    (handed-off . "left to another reviewer")
     (asking    . "asking you something")
     (waiting   . "waiting on a permission prompt")
     (netfail   . "link dropped; reset it")
@@ -102,12 +113,15 @@ still reading the diff and one posting your answer looked alike.")
 (defconst decknix-review-board-attention-phases '(awaiting asking waiting netfail)
   "Phases in which the session is blocked on you.")
 
-(defconst decknix-review-board-settled-phases '(posted acted idle)
+(defconst decknix-review-board-settled-phases '(posted acted stalled handed-off idle)
   "Phases in which a session has stopped: neither working nor blocked on you.
 Only a settled session is re-reviewed; one still working or asking has
 the newer state in hand, or a question to answer first.")
 
-(defun decknix-review-board-phase (state ask posted answered &optional reviewed)
+(defconst decknix-review-board-stopped-states '("ready" "finished" "idle")
+  "Statuses of a session whose turn ended and that is waiting for input.")
+
+(defun decknix-review-board-phase (state ask posted answered &optional reviewed signals)
   "Return the review phase of a session.  Pure.
 
 STATE is its status string, ASK what its closing turn asks (see
@@ -115,6 +129,14 @@ STATE is its status string, ASK what its closing turn asks (see
 its closing turn reported the review on GitHub, ANSWERED the gate its
 last prompt answered (see `decknix-agent-turn-answered-gate'), and
 REVIEWED non-nil when the feed holds my settled review of the PR.
+SIGNALS is a plist read from the session's last message and the PR:
+`:netfail' (the network failure it ended on) and `:handed-off' (why the
+review is someone else's now), see `decknix-review-board-handed-off'.
+
+A stopped session that matches none of the above is `stalled', not
+`idle': the review stopped short of its gate without asking anything, and
+nothing will move it unless you do.  `idle' is left for the states that
+are not a stopped turn (closing, watching).
 
 A live turn is judged by what started it: answering a gate with a go-ahead
 means the agent is posting, any other answer means it is revising, and no
@@ -133,19 +155,81 @@ not: my review existing does not answer what the agent is asking (see
      ((equal state "working")
       (pcase intent ('affirm 'actioned) ('nil 'assessing) (_ 'revising)))
      (posted 'posted)
+     ;; A session whose last message is a network failure is dead on the
+     ;; link whatever its status says: a first prompt that failed before
+     ;; any turn completed was never flagged, and read as idle.
+     ((plist-get signals :netfail) 'netfail)
      ((equal state "asking") (if (plist-get ask :verdict) 'awaiting 'asking))
      (reviewed 'posted)
      ;; Settled after a go-ahead with no review link: it acted, but did
      ;; not say it posted (a failed submit reads like this), so it is
      ;; neither `posting' nor `posted'.
      ((eq intent 'affirm) 'acted)
+     ((plist-get signals :handed-off) 'handed-off)
+     ((member state decknix-review-board-stopped-states) 'stalled)
      (t 'idle))))
 
-(defun decknix-review-board-phase-detail (phase ask answered)
+(defconst decknix-review-board-handed-off-regexp
+  (rx (or (seq "hand" (? (or "ed" "ing")) (? " it") (? " this") (+ space) "off")
+          "handoff" "hand-off"
+          (seq (or "waiting" "wait") (+ space) (or "on" "for") (+ space)
+               (? (or "the" "a")) (* space)
+               (? (or "other" "another" "second" "second-opinion")) (* space)
+               "reviewer")
+          (seq "leav" (or "e" "ing") (+ space) (or "it" "this" "the review")
+               (+ space) (or "to" "for") (+ space))
+          (seq "defer" (? "ring") (+ space) "to" (+ space))
+          (seq (or "another" "a different" "the other") (+ space) "reviewer"
+               (+ space) (or "owns" "has" "is" "will"))))
+  "Phrases in a session's closing message that hand the review to someone else.
+Matched case-insensitively, in the tail of the message only (see
+`decknix-review-board-handed-off').")
+
+(defconst decknix-review-board-handed-off-scan-chars 1500
+  "How much of a session's closing message is read for a hand-off.")
+
+(defun decknix-review-board-handed-off (text item viewer)
+  "Return why the review is someone else's now, or nil.  Pure.
+
+TEXT is the session's closing message, ITEM its PR's feed entry and
+VIEWER my login.  Two kinds of evidence, either sufficient:
+
+- the session said so: its closing message hands the review off or waits
+  on another reviewer (`decknix-review-board-handed-off-regexp');
+- the PR says so: someone else approved it and I have not reviewed it.
+
+Asked only of a session that has stopped without asking or posting (see
+`decknix-review-board-phase'), so a session waiting on you is never
+filed away because a colleague approved."
+  (let* ((approvers (and item (seq-remove (lambda (a) (equal a viewer))
+                                          (append (map-elt item 'approvers) nil))))
+         (mine (and item (map-elt item 'my_review)))
+         (tail (and (stringp text)
+                    (substring text (max 0 (- (length text)
+                                              decknix-review-board-handed-off-scan-chars))))))
+    (cond
+     ((and tail (let ((case-fold-search t))
+                  (string-match-p decknix-review-board-handed-off-regexp tail)))
+      "handed off")
+     ((and approvers (or (null mine) (equal mine "")))
+      (concat "approved by " (string-join approvers ", "))))))
+
+(defun decknix-review-board-phase-detail (phase ask answered &optional gone signals)
   "Return the words shown after PHASE on a row, or nil.  Pure.
 
 The verdict and the reply expected while waiting on you (\"APPROVE ·
-reply 1-3, rec 1\"), the verdict being posted once you have answered."
+reply 1-3, rec 1\"), the verdict being posted once you have answered.
+
+When GONE (the PR merged or closed) a question is `moot': offering
+\"reply 1-3\" for a PR that no longer exists invites an answer that can
+only post into nothing.  SIGNALS (see `decknix-review-board-phase') name
+the hand-off or the failure line."
+  (if (and gone (memq phase '(awaiting asking waiting netfail stalled)))
+      "moot"
+    (decknix-review-board--phase-detail-1 phase ask answered signals)))
+
+(defun decknix-review-board--phase-detail-1 (phase ask answered signals)
+  "The detail for PHASE when the PR is still open; see the caller."
   (let ((verdict (or (plist-get ask :verdict)
                      (plist-get (plist-get answered :ask) :verdict))))
     (pcase phase
@@ -157,6 +241,9 @@ reply 1-3, rec 1\"), the verdict being posted once you have answered."
                                           (plist-get ask :reply))))))
         " · "))
       ((or 'actioned 'acted) verdict)
+      ('handed-off (plist-get signals :handed-off))
+      ('netfail (and (plist-get signals :netfail) "y resets and resumes"))
+      ('stalled "y nudges it on")
       (_ nil))))
 
 (defun decknix-review-board--lane (has-session attention status bot-p &optional phase updated)
@@ -172,14 +259,14 @@ UPDATED non-nil when the PR moved on since the review that matters
 Precedence is deliberate and only partly obvious:
 
 - `gone' outranks attention.  A session blocked on a question whose PR
-  has merged is `finished': the work landed, so the question is history
+  has merged is `obsolete': the work landed, so the question is history
   rather than a call on your time.  Attention still outranks everything
   ELSE -- `stale' and `answered' describe the PR, not whether the agent
   is stuck.
 - `updated' sits just below attention: a PR the author changed after the
   review wants you again, whether or not a session is still around, but
   a question already waiting is answered first.
-- `finished' outranks the activity lane.  Once no review is wanted, that
+- `posted' outranks the activity lane.  Once no review is wanted, that
   the session was mid-flight stops being interesting.
 - Any live, unblocked, not-gone session is `doing', regardless of author.
 - Bot rows fold ONLY when no session is on them.  The flood is forty
@@ -193,9 +280,9 @@ Precedence is deliberate and only partly obvious:
    ;; In practice the board filled with questions about PRs the author
    ;; had already merged, and a lane whose whole job is "these want you
    ;; now" stopped meaning it.  The question is still answerable from
-   ;; `finished'; a needs-you lane you have learned to distrust is not
+   ;; `obsolete'; a needs-you lane you have learned to distrust is not
    ;; recoverable.
-   ((and has-session (eq status 'gone)) 'finished)
+   ((and has-session (eq status 'gone)) 'obsolete)
    ;; Ahead of attention for the same reason as `gone': a question about
    ;; a PR the author has taken back to draft is not a call on your time
    ;; yet.  The row returns by itself when the PR is marked ready again.
@@ -205,17 +292,23 @@ Precedence is deliberate and only partly obvious:
    ;; would sit in otherwise -- Finished, usually -- it is work again.
    (updated 'rereview)
    ;; I have already decided this one, so no review is wanted and the row
-   ;; belongs with the finished work -- not sitting in `doing' as though
+   ;; belongs with the posted work -- not sitting in `doing' as though
    ;; it were still mid-flight, which is where an approved PR stayed.
    ;;
    ;; Placed AFTER attention, unlike `gone': a merged PR's question is
    ;; moot, but my approving a PR does not answer whatever the agent is
    ;; asking me.  A blocked session still wants me.
-   ((and has-session (eq status 'reviewed)) 'finished)
+   ((and has-session (eq status 'reviewed)) 'posted)
    ;; The session's own report that it posted, so a review leaves the
    ;; activity lane as soon as it is on GitHub rather than whenever the
    ;; feed next notices.
-   ((and has-session (eq phase 'posted)) 'finished)
+   ((and has-session (eq phase 'posted)) 'posted)
+   ;; Stopped without asking: not a question, so not Needs you, but not
+   ;; in flight either -- nothing will move it until you nudge it.
+   ((and has-session (eq phase 'stalled)) 'stalled)
+   ;; Someone else has the review: waiting on them, like a draft is
+   ;; waiting on its author.
+   ((and has-session (eq phase 'handed-off)) 'on-hold)
    ;; Any live session that is neither blocked nor gone is IN PROGRESS,
    ;; whoever authored the PR.  A dispatched bot session is one session
    ;; doing work -- you want to watch its progress, so it shows
@@ -315,8 +408,10 @@ session tagged both `review' and `fix' reads as the more specific `fix'."
 
 SESSION is a plist with `:name', `:conv-key', `:prs' (a list of
 `repo#number'), `:state' and `:bot-p', and optionally `:ask' (what its
-closing turn asks), `:posted' (that turn reported the review on GitHub)
-and `:answered' (the gate its last prompt answered).  STATUS-FN maps a
+closing turn asks), `:posted' (that turn reported the review on GitHub),
+`:answered' (the gate its last prompt answered), `:netfail' and
+`:handed-off' (see `decknix-review-board-phase'), and `:since' (when it
+entered its state, as a float time).  STATUS-FN maps a
 PR key to its staleness status; PRIORITY-FN maps a PR key to its
 priority; REREVIEW-FN, when given, maps (PR-KEY SETTLED) to the
 `decknix-review-board-rereview-info' plist or nil.  Only a single-PR
@@ -336,10 +431,16 @@ whole group rather than being buried inside it."
          (status (decknix--hub-review-status-aggregate statuses))
          (ask (plist-get session :ask))
          (answered (plist-get session :answered))
+         (signals (list :netfail (plist-get session :netfail)
+                        :handed-off (plist-get session :handed-off)))
+         (gone (eq status 'gone))
          (phase (decknix-review-board-phase
                  (plist-get session :state) ask (plist-get session :posted)
-                 answered (eq status 'reviewed)))
-         (attention (and (memq phase decknix-review-board-attention-phases) t))
+                 answered (eq status 'reviewed) signals))
+         ;; A question about a merged PR is moot, so it is not a call on
+         ;; your time: no needs-you face, no count in the header.
+         (attention (and (not gone)
+                         (memq phase decknix-review-board-attention-phases) t))
          (rereview (and rereview-fn (= 1 (length prs))
                         (memq phase decknix-review-board-settled-phases)
                         (funcall rereview-fn (car prs) t)))
@@ -364,7 +465,11 @@ whole group rather than being buried inside it."
           :phase phase
           :phase-detail (if rereview
                             (decknix-review-board-rereview-summary rereview)
-                          (decknix-review-board-phase-detail phase ask answered))
+                          (decknix-review-board-phase-detail
+                           phase ask answered gone signals))
+          :attention attention
+          :netfail (plist-get session :netfail)
+          :since (plist-get session :since)
           :rereview rereview
           :ask ask
           :statuses statuses
@@ -383,8 +488,35 @@ whole group rather than being buried inside it."
   "Non-nil when PR-KEY appears in any SESSIONS entry's `:prs'."
   (seq-some (lambda (s) (member pr-key (plist-get s :prs))) sessions))
 
+(defconst decknix-review-board-recency-lanes '(posted obsolete)
+  "Lanes ordered by most recent activity rather than priority.
+Priority ranks what to do next; these lanes hold work already done, where
+the useful order is what happened last.  A merged PR scores 0, so a
+priority sort there was arbitrary.")
+
+(defun decknix-review-board--row-activity (row activity-fn)
+  "Return ROW's most recent activity as a float time, or nil.
+The later of when its session entered its state and ACTIVITY-FN of each
+of its PR keys (feed `updated', or when it merged or closed)."
+  (let ((times (delq nil (cons (plist-get row :since)
+                               (and activity-fn
+                                    (mapcar activity-fn (plist-get row :prs)))))))
+    (and times (apply #'max times))))
+
+(defun decknix-review-board--sort-lane (lane rows)
+  "Return ROWS of LANE in display order.  Pure."
+  (let ((activity (lambda (r) (or (plist-get r :activity) 0))))
+    (sort (copy-sequence rows)
+          (if (memq lane decknix-review-board-recency-lanes)
+              (lambda (a b) (> (funcall activity a) (funcall activity b)))
+            (lambda (a b)
+              (let ((pa (plist-get a :priority)) (pb (plist-get b :priority)))
+                (if (= pa pb)
+                    (> (funcall activity a) (funcall activity b))
+                  (> pa pb))))))))
+
 (defun decknix-review-board-build (items sessions key-fn status-fn priority-fn bot-fn
-                                         &optional rereview-fn)
+                                         &optional rereview-fn activity-fn)
   "Return the board model: an alist of (LANE . ROWS).  Pure.
 
 ITEMS is the reviews feed, SESSIONS the live review sessions (see
@@ -392,7 +524,9 @@ ITEMS is the reviews feed, SESSIONS the live review sessions (see
 `repo#number', STATUS-FN and PRIORITY-FN map a key to its status and
 priority, BOT-FN maps a feed item to whether its author is a bot, and
 REREVIEW-FN (optional) maps (PR-KEY SETTLED) to the re-review info of a
-PR updated since its review (see `decknix-review-board--session-row').
+PR updated since its review (see `decknix-review-board--session-row'),
+and ACTIVITY-FN (optional) maps a PR key to its last activity as a float
+time (see `decknix-review-board--row-activity').
 An updated request with no session gets a row of its own in `rereview',
 never folded into a bot group.
 
@@ -401,7 +535,9 @@ session becomes an `idle' row.  The asymmetry is the point: a session
 outlives its feed item, and a request precedes its session, so the two
 sources have to be unioned rather than either taken as the worklist.
 
-Rows sort by priority descending within each lane.  Empty lanes are
+Rows sort by priority descending within each lane, most recent first on
+a tie, except the lanes of done work, which sort by recency alone
+\(`decknix-review-board-recency-lanes').  Empty lanes are
 retained, so a lane's position on screen is learnable rather than
 shifting with the contents."
   (let* ((session-rows (mapcar (lambda (s)
@@ -473,24 +609,27 @@ shifting with the contents."
                       :items group :session nil :bot-p t
                       :lane (decknix-review-board--lane nil nil nil t))))
             bot-groups)))
-         (all (append session-rows idle-rows)))
+         (all (mapcar (lambda (row)
+                        (plist-put row :activity
+                                   (decknix-review-board--row-activity row activity-fn)))
+                      (append session-rows idle-rows))))
     (mapcar
      (lambda (lane)
        (cons (car lane)
-             (sort (seq-filter (lambda (r) (eq (plist-get r :lane) (car lane))) all)
-                   (lambda (a b) (> (plist-get a :priority)
-                                    (plist-get b :priority))))))
+             (decknix-review-board--sort-lane
+              (car lane)
+              (seq-filter (lambda (r) (eq (plist-get r :lane) (car lane))) all))))
      decknix-review-board-lanes)))
 
 (defun decknix-review-board-drop-finished (model)
-  "Return MODEL with the `finished' lane emptied.  Pure.
+  "Return MODEL with the `obsolete' lane emptied.  Pure.
 
 The auto-dismiss toggle uses this: once a PR merges or closes, its
 session drops off the board rather than lingering.  The lane is KEPT
 \(empty) rather than removed, so its position on screen stays learnable --
 the same reason empty lanes render at all."
   (mapcar (lambda (lane)
-            (if (eq (car lane) 'finished) (cons 'finished nil) lane))
+            (if (eq (car lane) 'obsolete) (cons 'obsolete nil) lane))
           model))
 
 (defun decknix-review-board-count (model)
@@ -501,6 +640,38 @@ the same reason empty lanes render at all."
   "Return how many rows in MODEL want you: Needs you plus Re-review."
   (+ (length (alist-get 'needs-you model))
      (length (alist-get 'rereview model))))
+
+(defun decknix-review-board-stalled-count (model)
+  "Return how many sessions in MODEL stopped without asking."
+  (length (alist-get 'stalled model)))
+
+
+;; ── palette ───────────────────────────────────────────────────────────
+;;
+;; One meaning per colour, the sidebar's: red failed, amber waiting on you,
+;; plain moving on its own, green done, grey quiet.  The board renders a
+;; rank with the sidebar's own face function, so the two cannot drift.
+
+(defconst decknix-review-board-phase-ranks
+  '((netfail . 0)
+    (awaiting . 1) (asking . 1) (waiting . 1) (stalled . 1) (updated . 1)
+    (assessing . 2) (revising . 2) (actioned . 2) (acted . 2)
+    (posted . 3)
+    (handed-off . 4) (idle . 4))
+  "Severity rank per phase: 0 red, 1 amber, 2 plain, 3 green, 4 grey.")
+
+(defconst decknix-review-board-quiet-lanes '(on-hold obsolete grouped idle)
+  "Lanes whose rows are grey whatever their phase: nothing wants you there.")
+
+(defun decknix-review-board-row-rank (row)
+  "Return ROW's severity rank (see `decknix-review-board-phase-ranks').  Pure.
+A row in a quiet lane is grey: a question about a merged PR, or a session
+waiting on another reviewer, must not look like work that wants you."
+  (cond
+   ((memq (plist-get row :lane) decknix-review-board-quiet-lanes) 4)
+   ((plist-get row :rereview) 1)
+   ((not (plist-get row :session)) 4)
+   (t (or (alist-get (plist-get row :phase) decknix-review-board-phase-ranks) 4))))
 
 
 ;; ── marks and verb targeting ─────────────────────────────────────────

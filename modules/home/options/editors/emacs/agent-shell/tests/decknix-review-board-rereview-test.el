@@ -172,7 +172,7 @@ Finished: that is a re-review.  Without a settled session it is not mine."
          (model (decknix-rr-test--build
                  items (list (list :name "pr-widget-7" :conv-key "c" :prs '("widget#7")
                                    :state "finished" :posted t)))))
-    (should (null (alist-get 'finished model)))
+    (should (null (alist-get 'posted model)))
     (let ((row (car (alist-get 'rereview model))))
       (should row)
       (should (eq 'updated (plist-get row :phase)))
@@ -199,7 +199,7 @@ Finished: that is a re-review.  Without a settled session it is not mine."
 (ert-deftest decknix-rr--blocked-outranks-updated ()
   (should (eq 'needs-you (decknix-review-board--lane t t 'stale nil 'awaiting t)))
   (should (eq 'rereview (decknix-review-board--lane t nil 'stale nil 'updated t)))
-  (should (eq 'finished (decknix-review-board--lane t nil 'gone nil 'updated t))))
+  (should (eq 'obsolete (decknix-review-board--lane t nil 'gone nil 'updated t))))
 
 ;; --- notify / auto, rate limit, worktree refresh -----------------------
 

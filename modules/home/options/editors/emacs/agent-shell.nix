@@ -377,14 +377,21 @@ let
                         decknix-agent-session-lifecycle-el
                         decknix-agent-turn-signals-el
                         decknix-attention-el ];
+    # `columns' and `prcache' are the board's own pure cells and its
+    # per-PR disk cache (titles, authors, merged or closed); same dir.
     extraSiteFiles = [
       "decknix-review-board.el"
       "decknix-review-board-rereview.el"
+      "decknix-review-board-columns.el"
+      "decknix-review-board-prcache.el"
     ];
     testFiles = [
       "decknix-review-gate-fixtures.el"
       "decknix-review-board-model-test.el"
       "decknix-review-board-rereview-test.el"
+      "decknix-review-board-columns-test.el"
+      "decknix-review-board-prcache-test.el"
+      "decknix-review-board-render-test.el"
     ];
   };
 

@@ -39,6 +39,8 @@
 
 (require 'decknix-review-board-model)
 (require 'decknix-review-board-rereview)
+(require 'decknix-review-board-columns)
+(require 'decknix-review-board-prcache)
 (require 'decknix-agent-session-lifecycle)
 ;; The one look for "needs you": its glyph and face, shared with the
 ;; sidebar, the picker and the tab bar.
@@ -125,6 +127,15 @@
                   (owner &optional workspaces))
 (declare-function decknix-workspace-clone-args "decknix-workspace-orgs"
                   (owner &optional workspaces))
+(declare-function decknix--agent-net-error-p "decknix-agent-net-error" (text))
+(declare-function decknix--agent-net-error-buffer-tail "decknix-agent-net-error" (buffer))
+(declare-function decknix--agent-net-error-reset-buffer "decknix-agent-net-error" (buffer))
+(declare-function decknix--session-bulk-dispatch "decknix-agent-shell-main-session" (bufs input))
+(declare-function decknix-attention-since "decknix-attention" (buffer))
+(declare-function decknix--layout-severity-face "decknix-sidebar-layout" (rank))
+(declare-function decknix-pr-review-view-open "decknix-pr-review-view"
+                  (owner repo number &optional url))
+(defvar decknix-agent-net-error-retry-prompt)
 (defvar decknix--sidebar-previous-sessions)
 (defvar decknix--agent-broker-key)
 (defvar decknix--hub-reviews)
@@ -145,8 +156,9 @@ here as in the sidebar, the picker and the tab bar."
   :group 'decknix-review-board)
 
 (defface decknix-review-board-assessing
-  '((t :inherit warning))
-  "Face for a review still being assessed (or revised): in flight, amber."
+  '((t :inherit default))
+  "Face for a review still being assessed (or revised): in flight, plain.
+Amber means something wants you; a review in flight wants nothing."
   :group 'decknix-review-board)
 
 (defface decknix-review-board-actioned
@@ -163,7 +175,9 @@ here as in the sidebar, the picker and the tab bar."
   `((awaiting  ,decknix-attention-glyph decknix-attention-face "awaiting you")
     (asking    ,decknix-attention-glyph decknix-attention-face "asking")
     (waiting   ,decknix-attention-glyph decknix-attention-face "permission")
-    (netfail   ,decknix-attention-glyph decknix-attention-face "netfail")
+    (netfail   "✖" error "crashed")
+    (stalled   ,decknix-attention-glyph decknix-attention-face "stalled")
+    (handed-off "→" font-lock-comment-face "handed off")
     (assessing "◐" decknix-review-board-assessing "assessing")
     (revising  "◐" decknix-review-board-assessing "revising")
     (actioned  "◑" decknix-review-board-actioned "posting")
@@ -184,13 +198,29 @@ which half and colour.")
   (or (cdr (assq phase decknix-review-board-phase-looks))
       (list "●" 'font-lock-comment-face (symbol-name (or phase 'idle)))))
 
+(defconst decknix-review-board-severity-faces
+  '((0 . (:foreground "#ff5f5f" :weight bold))
+    (1 . (:foreground "#ffaf5f" :weight bold))
+    (2 . default)
+    (3 . (:foreground "#87af87"))
+    (4 . (:inherit font-lock-comment-face)))
+  "Fallback severity faces, used only when the sidebar is not loaded.
+The same values as `decknix-sidebar-layout-severity-faces'.")
+
+(defun decknix-review-board--severity-face (rank)
+  "Return the face for severity RANK: the sidebar's, so the two agree."
+  (if (fboundp 'decknix--layout-severity-face)
+      (decknix--layout-severity-face rank)
+    (or (alist-get (or rank 4) decknix-review-board-severity-faces) 'default)))
+
 (defface decknix-review-board-covered
-  '((t :inherit warning))
+  '((t :inherit font-lock-comment-face))
   "Face for a blocked row somebody else has already answered or invalidated.
 
 Deliberately NOT bold and NOT `error'.  The row is still yours, but an
 approved or stale PR must not compete with a review nobody has looked at
--- if everything blocked is red, red stops meaning anything."
+-- if everything blocked is red, red stops meaning anything.  Grey, the
+sidebar's quiet colour, rather than amber, which means waiting on you."
   :group 'decknix-review-board)
 
 (defvar-local decknix-review-board--model nil
@@ -203,6 +233,47 @@ approved or stale PR must not compete with a review nobody has looked at
   "Name of the review board buffer.")
 
 ;; ── gathering ────────────────────────────────────────────────────────
+
+(defconst decknix-review-board-tail-chars 4000
+  "How much trailing session text is read for a crash when net-error is absent.")
+
+(defvar-local decknix-review-board--tail-memo nil
+  "(TICK . NETFAIL) for the session text last read, in a session buffer.")
+
+(defun decknix-review-board--session-netfail (buf state)
+  "Return the network failure BUF's last message ended on, or nil.
+
+Read from the text, not the status, because a session whose first prompt
+failed never completed a turn for net-error to flag: it read as idle with
+an `API Error: ... (ENOTFOUND)' as its only output.  Only a stopped
+session is read (a live turn is not dead), through net-error's own
+matcher, and memoised on the buffer's modification tick, so a repaint
+reads each session's text at most once per change."
+  (when (and (buffer-live-p buf)
+             (not (member state '("working" "waiting" "netfail")))
+             (fboundp 'decknix--agent-net-error-p))
+    (with-current-buffer buf
+      (let ((tick (buffer-chars-modified-tick)))
+        (if (eql tick (car decknix-review-board--tail-memo))
+            (cdr decknix-review-board--tail-memo)
+          (let ((reason (decknix--agent-net-error-p
+                         (if (fboundp 'decknix--agent-net-error-buffer-tail)
+                             (decknix--agent-net-error-buffer-tail buf)
+                           (buffer-substring-no-properties
+                            (max (point-min) (- (point-max) decknix-review-board-tail-chars))
+                            (point-max))))))
+            (setq decknix-review-board--tail-memo (cons tick reason))
+            reason))))))
+
+(defun decknix-review-board--session-handed-off (buf prs)
+  "Return why BUF's review of PRS is someone else's now, or nil.
+Single-PR sessions only: a group is a bot batch nobody hands off."
+  (when (= 1 (length prs))
+    (decknix-review-board-handed-off
+     (and (fboundp 'decknix-agent-turn-closing-text)
+          (decknix-agent-turn-closing-text buf))
+     (decknix-review-board--item-for-key (car prs))
+     (alist-get 'viewer decknix--hub-reviews))))
 
 (defun decknix-review-board--sessions ()
   "Return the live review sessions as model plists.
@@ -222,12 +293,18 @@ in the first place."
                    (when prs
                      (let* ((tags (ignore-errors
                                     (decknix--agent-tags-for-buffer buf)))
-                            (plan (bound-and-true-p decknix--agent-turn-plan)))
+                            (plan (bound-and-true-p decknix--agent-turn-plan))
+                            (state nil))
+                       (setq state (ignore-errors (decknix-agent-buffer-status buf)))
                        (list :name (buffer-name buf)
                              :buffer buf
                              :conv-key ck
                              :prs prs
-                             :state (ignore-errors (decknix-agent-buffer-status buf))
+                             :state state
+                             :netfail (decknix-review-board--session-netfail buf state)
+                             :handed-off (decknix-review-board--session-handed-off buf prs)
+                             :since (and (fboundp 'decknix-attention-since)
+                                         (decknix-attention-since buf))
                              ;; Where the review is in its two phases, from
                              ;; what turn-signals already holds in memory:
                              ;; the closing turn (parsed once per turn) and
@@ -409,28 +486,72 @@ Sessions are NEVER filtered -- a running agent is a fact regardless of
 whether its PR passes a display filter, and a Finished session's PR is
 not in the feed at all.  Filters govern only what is offered as work to
 pick up."
-  (decknix-review-board--learn-owners (alist-get 'items decknix--hub-reviews))
-  (decknix-review-board-build
-   (decknix-review-board--board-items)
-   (decknix-review-board--sessions)
-   #'decknix-review-board--item-key
-   #'decknix-review-board--status-for-key
-   #'decknix-review-board--priority-for-key
-   #'decknix-review-board--item-bot-p
-   #'decknix-review-board--rereview-for-key))
+  (let ((items (alist-get 'items decknix--hub-reviews)))
+    (decknix-review-board--learn-owners items)
+    (decknix-review-board-prcache-learn items #'decknix-review-board--item-key))
+  (let ((model (decknix-review-board-build
+                (decknix-review-board--board-items)
+                (decknix-review-board--sessions)
+                #'decknix-review-board--item-key
+                #'decknix-review-board--status-for-key
+                #'decknix-review-board--priority-for-key
+                #'decknix-review-board--item-bot-p
+                #'decknix-review-board--rereview-for-key
+                #'decknix-review-board--activity-for-key)))
+    (decknix-review-board--request-gone-states model)
+    model))
+
+(defun decknix-review-board--activity-for-key (key)
+  "Return PR KEY's last activity as a float time, or nil.
+The feed's `updated' while it is listed; once it has gone, when it
+merged or closed, or failing that what the feed last said."
+  (let* ((item (decknix-review-board--item-for-key key))
+         (entry (decknix-review-board-prcache-get key))
+         (ts (or (and item (decknix-review-board--activity-time-string item))
+                 (plist-get entry :updated))))
+    (or (and (not item) (decknix-review-board-prcache-gone-time entry))
+        (and (stringp ts) (ignore-errors (float-time (date-to-time ts)))))))
+
+(defun decknix-review-board--activity-time-string (item)
+  "Return ITEM's activity timestamp string, with or without the hub filter."
+  (if (fboundp 'decknix--hub-request-activity-time)
+      (decknix--hub-request-activity-time item)
+    (or (alist-get 'updated item) (alist-get 'created item))))
+
+(defun decknix-review-board--request-gone-states (model)
+  "Ask once, in the background, whether each Obsolete PR merged or closed.
+Starts nothing for a PR already answered (see
+`decknix-review-board-prcache-request-state'), so a repaint costs a
+cache lookup per row."
+  (dolist (row (alist-get 'obsolete model))
+    (dolist (key (plist-get row :prs))
+      (when-let* ((url (decknix-review-board-row-url (list :prs (list key)))))
+        (decknix-review-board-prcache-request-state key url)))))
 
 ;; ── rendering ────────────────────────────────────────────────────────
 
+(defun decknix-review-board--row-facts (row)
+  "Return what ROW's columns show about its PR: the feed item, else the cache.
+As (ITEM . ENTRY): ITEM is the live feed entry or nil, ENTRY the cached
+plist, so a PR that has left the feed still has a title and an author."
+  (let ((key (car (plist-get row :prs))))
+    (cons (or (plist-get row :item) (decknix-review-board--item-for-key key))
+          (decknix-review-board-prcache-get key))))
+
 (defun decknix-review-board--row-title (row)
   "Return a display title for ROW."
-  (let ((prs (plist-get row :prs)))
-    (if (eq (plist-get row :kind) 'group)
-        (format "%s  (%d PRs)"
-                (or (plist-get row :name) "group") (length prs))
-      (let* ((key (car prs))
-             (item (decknix-review-board--item-for-key key))
-             (title (and item (alist-get 'title item))))
-        (format "%-22s %s" (or key "?") (or title ""))))))
+  (if (eq (plist-get row :kind) 'group)
+      (format "%d PRs" (length (plist-get row :prs)))
+    (let ((facts (decknix-review-board--row-facts row)))
+      (or (and (car facts) (alist-get 'title (car facts)))
+          (plist-get (cdr facts) :title)
+          ""))))
+
+(defun decknix-review-board--row-key-label (row)
+  "Return ROW's key column: the PR key, or the group's name."
+  (if (eq (plist-get row :kind) 'group)
+      (or (plist-get row :name) "group")
+    (or (car (plist-get row :prs)) "?")))
 
 (defun decknix-review-board--row-owner-repo (row)
   "Return (OWNER . REPO) for ROW's first PR, from its feed item, or nil."
@@ -454,14 +575,91 @@ resolution, so a repaint starts no process."
      (ignore-errors
        (decknix-review-clone-resolve-cached (car coords) (cdr coords))))))
 
-(defun decknix-review-board--insert-row (row)
-  "Insert one propertised ROW."
-  (let* ((status (decknix--hub-review-status-aggregate (plist-get row :statuses)))
-         (badge (decknix--hub-review-status-badge status))
+(defun decknix-review-board--gone-label (row)
+  "Return `merged', `closed', `left queue' or `...' for an Obsolete ROW.
+`...' while the one background lookup is still out."
+  (let ((labels (delete-dups
+                 (mapcar (lambda (key)
+                           (pcase (decknix-review-board-prcache-state-label
+                                   (decknix-review-board-prcache-get key))
+                             ('nil "...") ("open" "left queue") (l l)))
+                         (plist-get row :prs)))))
+    (string-join labels "/")))
+
+(defun decknix-review-board--phase-text (row has-session)
+  "Return ROW's trailing phase text, propertised."
+  (let* ((phase (plist-get row :phase))
+         (look (decknix-review-board--phase-look phase))
+         (rank (decknix-review-board-row-rank row))
+         (detail (plist-get row :phase-detail))
          (state (plist-get row :state))
-         (attention (and (memq (plist-get row :phase)
-                               decknix-review-board-attention-phases)
-                         t))
+         (lane (plist-get row :lane))
+         (verb (plist-get row :verb))
+         (progress (plist-get row :progress)))
+    (cond
+     ((and (not has-session) (plist-get row :rereview))
+      (concat (propertize (nth 2 look) 'face (decknix-review-board--severity-face rank))
+              (and detail (concat "  " detail))
+              (propertize "  · no session" 'face 'font-lock-comment-face)))
+     ((not has-session)
+      (let ((note (decknix-review-board--clone-note row)))
+        (propertize (or note "no session")
+                    'face (if (and note (string-prefix-p "clone failed" note))
+                              'error
+                            'font-lock-comment-face))))
+     (t
+      (concat
+       (when (eq lane 'obsolete)
+         (propertize (concat (decknix-review-board--gone-label row) "  ")
+                     'face 'font-lock-comment-face))
+       (when (and (eq lane 'doing) verb)
+         (propertize (format "%s " verb) 'face 'font-lock-keyword-face))
+       (when (and (eq lane 'doing) progress)
+         (propertize (format "%s " progress) 'face 'font-lock-constant-face))
+       (propertize (nth 2 look) 'face (decknix-review-board--severity-face rank))
+       (when (and detail (not (string-empty-p detail)))
+         (concat "  " (if (equal detail "moot")
+                          (propertize detail 'face 'font-lock-comment-face)
+                        detail)))
+       (when (and (eq phase 'idle) state
+                  (not (member state '("ready" "finished"))))
+         (propertize (concat "  " state) 'face 'font-lock-comment-face)))))))
+
+(defun decknix-review-board--row-help (_window object pos)
+  "Return the hover text for the row at POS in OBJECT: its priority breakdown.
+Computed when hovered, not when painted, so a repaint costs nothing for it."
+  (when-let* ((row (and (bufferp object)
+                        (get-text-property pos 'decknix-review-board-row object))))
+    (let* ((key (car (plist-get row :prs)))
+           (item (decknix-review-board--item-for-key key)))
+      (concat
+       (or key "?")
+       (if (and item (fboundp 'decknix--hub-review-priority-explain))
+           (concat "\n" (decknix--hub-review-priority-explain
+                         item
+                         (and (fboundp 'decknix--hub-review-status)
+                              (decknix--hub-review-status item t))
+                         (and (fboundp 'decknix--hub-request-age-days)
+                              (decknix--hub-request-age-days item))))
+         "\nleft the feed: priority 0 (merged, closed or no longer requested)")
+       (if-let* ((d (plist-get row :phase-detail))) (concat "\n" d) "")))))
+
+(defun decknix-review-board--window-width ()
+  "Return the width of the window showing this buffer, or 160."
+  (let ((win (get-buffer-window (current-buffer) t)))
+    (if (window-live-p win) (window-width win) 160)))
+
+(defvar-local decknix-review-board--rendered-width nil
+  "Window width the board was last laid out for.")
+
+(defun decknix-review-board--insert-row (row &optional title-width)
+  "Insert one propertised ROW, its title TITLE-WIDTH columns wide."
+  (let* ((title-width (or title-width
+                          (decknix-review-board-columns-title-width
+                           (decknix-review-board--window-width))))
+         (status (decknix--hub-review-status-aggregate (plist-get row :statuses)))
+         (badge (decknix--hub-review-status-badge status))
+         (attention (plist-get row :attention))
          (marked (and decknix-review-board--marks
                       (decknix-review-board--marked-p row)))
          ;; A session indicator, because the two largest lanes are mostly
@@ -469,110 +667,122 @@ resolution, so a repaint starts no process."
          ;; that happens to be idle render identically, and the board reads
          ;; as a list of stale sessions to clean up rather than a backlog.
          (has-session (and (plist-get row :session) t))
-         ;; In-progress rows lead their status column with what the
-         ;; session is DOING (its verb) and how far along (N/M), so the
-         ;; lane reads as "merge 3/5 working" rather than a bare state.
-         (verb (plist-get row :verb))
-         (progress (plist-get row :progress))
-         (activity (when (eq (plist-get row :lane) 'doing)
-                     (string-trim
-                      (concat (when verb
-                                (propertize (format "%-6s " verb)
-                                            'face 'font-lock-keyword-face))
-                              (when progress
-                                (propertize (format "%-5s " progress)
-                                            'face 'font-lock-constant-face))))))
-         (phase (plist-get row :phase))
-         (look (decknix-review-board--phase-look phase))
-         (detail (plist-get row :phase-detail))
-         ;; The phase leads, because it is the answer to "what is this
-         ;; session doing": assessing, waiting on you with which verdict,
-         ;; or posting.  The raw state follows only when the phase alone
-         ;; hides it (an idle session that is `closing' or `watching').
-         (phase-text
-          (concat (propertize (nth 2 look) 'face (nth 1 look))
-                  (when (and detail (not (string-empty-p detail)))
-                    (concat "  " detail))
-                  (when (and (eq phase 'idle) state
-                             (not (member state '("ready" "finished"))))
-                    (propertize (concat "  " state) 'face 'font-lock-comment-face))))
-         (trailing (cond ((and (not has-session) (plist-get row :rereview))
-                          (concat phase-text
-                                  (propertize "  · no session" 'face 'font-lock-comment-face)))
-                         ((not has-session)
-                          (let ((note (decknix-review-board--clone-note row)))
-                            (propertize (or note "no session")
-                                        'face (if (and note (string-prefix-p "clone failed" note))
-                                                  'error
-                                                'font-lock-comment-face))))
-                         ((and (eq (plist-get row :lane) 'doing)
-                               (not (string-empty-p (or activity ""))))
-                          (concat activity "  " phase-text))
-                         (t phase-text)))
-         (line (format "%s %-2s %s %5d  %-52s %s"
-                       (if marked "*" " ")
-                       (if (string-empty-p badge) " " badge)
-                       (if (or has-session (plist-get row :rereview))
-                           (propertize (nth 0 look) 'face (nth 1 look))
-                         (propertize "\u00b7" 'face 'font-lock-comment-face))
-                       (plist-get row :priority)
-                       (truncate-string-to-width
-                        (decknix-review-board--row-title row) 52)
-                       trailing)))
+         (look (decknix-review-board--phase-look (plist-get row :phase)))
+         (rank (decknix-review-board-row-rank row))
+         (facts (decknix-review-board--row-facts row))
+         (item (car facts))
+         (entry (cdr facts))
+         (author (decknix-review-board-columns-author
+                  (or (alist-get 'author item) (plist-get entry :author))
+                  (or (alist-get 'author_kind item) (plist-get entry :author-kind))))
+         (age (decknix-review-board-columns-age
+               (or (alist-get 'created item) (plist-get entry :created))
+               (let ((times (delq nil (list (plist-get row :activity)
+                                            (plist-get row :since)))))
+                 (and times (apply #'max times)))))
+         (ci (decknix-review-board-columns-ci item))
+         (mine (decknix-review-board-columns-my-review item))
+         (threads (decknix-review-board-columns-threads item))
+         (cell #'decknix-review-board-columns-cell)
+         (line
+          (concat
+           (if marked "*" " ") " "
+           (funcall cell (if (string-empty-p badge) "" badge) 2) " "
+           (if (or has-session (plist-get row :rereview))
+               (propertize (nth 0 look) 'face (decknix-review-board--severity-face rank))
+             (propertize "\u00b7" 'face 'font-lock-comment-face))
+           " "
+           (format "%5d" (plist-get row :priority)) "  "
+           (funcall cell (decknix-review-board--row-key-label row) 24) " "
+           (funcall cell (decknix-review-board--row-title row) title-width) " "
+           (propertize (funcall cell author decknix-review-board-columns-author-width)
+                       'face 'font-lock-comment-face)
+           " "
+           (propertize (funcall cell age 9) 'face 'font-lock-comment-face) " "
+           (propertize (car ci) 'face (decknix-review-board--severity-face (cdr ci))) " "
+           (propertize (funcall cell (car mine) 2)
+                       'face (decknix-review-board--severity-face (cdr mine)))
+           " "
+           (funcall cell threads 6) " "
+           (decknix-review-board--phase-text row has-session)))
+         (row-face (decknix-review-board--row-face attention status)))
+    (when row-face
+      (add-face-text-property 0 (length line) row-face t line))
     (insert (propertize line
                         'decknix-review-board-row row
-                        ;; Urgency reflects the PR, not just the agent: see
-                        ;; `decknix-review-board--row-face'.
-                        'face (decknix-review-board--row-face attention status))
+                        'help-echo #'decknix-review-board--row-help)
             "\n")))
+
+(defun decknix-review-board--column-labels (title-width)
+  "Return the column labels for a title TITLE-WIDTH wide.
+Laid out with the same cells as a row, so the two cannot drift."
+  (let ((cell #'decknix-review-board-columns-cell))
+    (concat "m "
+            (funcall cell "st" 2) " "
+            "s"  " "
+            (format "%5s" "pri") "  "
+            (funcall cell "pr" 24) " "
+            (funcall cell "title" title-width) " "
+            (funcall cell "author" decknix-review-board-columns-author-width) " "
+            (funcall cell "age/quiet" 9) " "
+            "c" " "
+            (funcall cell "me" 2) " "
+            (funcall cell "thr" 6) " "
+            "phase")))
+
+(defun decknix-review-board--header-line ()
+  "Return the board's header line: the column labels, pinned while scrolling."
+  (concat (propertize " " 'display '(space :align-to 0))
+          (propertize (decknix-review-board--column-labels
+                       (decknix-review-board-columns-title-width
+                        (decknix-review-board--window-width)))
+                      'face 'font-lock-comment-face)))
+
+(defun decknix-review-board--header-text ()
+  "Return the board's two header lines: state, then the main keys."
+  (let ((need (decknix-review-board-attention-count decknix-review-board--model))
+        (stalled (decknix-review-board-stalled-count decknix-review-board--model)))
+    (concat
+     (propertize "Review Board" 'face 'decknix-review-board-lane)
+     (format "  %d rows" (decknix-review-board-count decknix-review-board--model))
+     (if (> need 0)
+         (propertize (format "  %s %d need you" decknix-attention-glyph need)
+                     'face 'decknix-attention-face)
+       "")
+     (if (> stalled 0)
+         (propertize (format "  %d stalled" stalled) 'face 'decknix-attention-face)
+       "")
+     ;; Auto-review state belongs HERE, not only in the Requests
+     ;; transient: this is the screen where you decide what to do about
+     ;; reviews, so the policy that spawns them unasked is part of it.
+     (propertize (format "   %s · auto-review %s · re-review %s · auto-dismiss %s"
+                         (if decknix-review-board-show-all "ALL requests" "filtered")
+                         (if (fboundp 'decknix-auto-review-state-label)
+                             (format "[%s]" (decknix-auto-review-state-label
+                                             decknix-auto-review-mode))
+                           "[?]")
+                         (format "[%s]" (or decknix-review-board-auto-rereview "off"))
+                         (if decknix-review-board-auto-dismiss "[on]" "[off]"))
+                 'face 'font-lock-constant-face)
+     "\n"
+     ;; The keys used every day; `?' has the rest.  Eight lines of cheat
+     ;; sheet pushed the rows off a laptop screen.
+     (propertize
+      "  RET open  v view  i inspect  j jump  y/1-9 answer, nudge or resume  d dispatch  k quit  s merge  R re-review  g refresh  ? all keys\n"
+      'face 'font-lock-comment-face))))
 
 (defun decknix-review-board--render ()
   "Render `decknix-review-board--model' into the current buffer."
   (let ((inhibit-read-only t)
-        (line (line-number-at-pos)))
+        (line (line-number-at-pos))
+        (title-width (decknix-review-board-columns-title-width
+                      (decknix-review-board--window-width))))
+    (setq decknix-review-board--rendered-width (decknix-review-board--window-width))
     (erase-buffer)
-    (insert (propertize "Review Board" 'face 'decknix-review-board-lane)
-            (format "  (%d rows)   " (decknix-review-board-count
-                                      decknix-review-board--model))
-            (let ((need (decknix-review-board-attention-count
-                         decknix-review-board--model)))
-              (if (> need 0)
-                  (propertize (format "%s %d need you   " decknix-attention-glyph need)
-                              'face 'decknix-attention-face)
-                ""))
-            ;; Auto-review state belongs HERE, not only in the Requests
-            ;; transient: this is the screen where you decide what to do
-            ;; about reviews, so the policy that spawns them unasked is
-            ;; part of the picture rather than a setting elsewhere.
-            (propertize (format "%s   auto-review %s   re-review [%s]   auto-dismiss [%s]"
-                                (if decknix-review-board-show-all
-                                    "ALL requests" "filtered")
-                                (if (fboundp 'decknix-auto-review-state-label)
-                                    (format "[%s]" (decknix-auto-review-state-label
-                                                    decknix-auto-review-mode))
-                                  "[?]")
-                                (or decknix-review-board-auto-rereview "off")
-                                (if decknix-review-board-auto-dismiss "on" "off"))
-                        'face 'font-lock-constant-face)
-            "\n"
-            ;; A visible cheat sheet, not a pointer to one.  `?' existed
-            ;; and was announced in a header line, which is discoverability
-            ;; only for someone already looking for it.  Eight verbs on a
-            ;; read-only screen need to be readable without asking.
-            (propertize
-             (concat "  n/p move   RET open   i inspect   c copy   j jump   m mark   M lane\n"
-                     "  y / 1-9 answer the session at point (asks first)\n"
-                     "  d dispatch  k quit   D detach  s merge  A auto-review  x auto-dismiss  f filters  g refresh  ? help\n"
-                     "  R re-review an updated PR (C-u R: acknowledge)   X cycle re-review: off / notify / auto\n"
-                     "  r review a PR url not listed here   C clone a repo with no workspace, then dispatch\n")
-             'face 'font-lock-comment-face)
-            "\n"
-            (propertize "  m  ⚑ pri  row                                                  phase\n"
-                        'face 'font-lock-comment-face)
-            "\n")
+    (insert (decknix-review-board--header-text) "\n")
     (dolist (lane decknix-review-board-lanes)
       (let* ((rows (alist-get (car lane) decknix-review-board--model))
-             (face (if (memq (car lane) '(needs-you rereview))
+             (face (if (memq (car lane) '(needs-you rereview stalled))
                        'decknix-review-board-needs-you
                      'decknix-review-board-lane)))
         ;; Empty lanes are rendered too: a lane's position on screen has
@@ -580,16 +790,25 @@ resolution, so a repaint starts no process."
         ;; layout shifts under you exactly when you are scanning it.
         (insert (propertize (format "%s (%d)" (cdr lane) (length rows)) 'face face)
                 (propertize
-                 (format "  — %s\n"
+                 (format "  %s\n"
                          (or (alist-get (car lane) decknix-review-board-lane-help)
                              ""))
                  'face 'font-lock-comment-face))
         (if rows
-            (dolist (row rows) (decknix-review-board--insert-row row))
+            (dolist (row rows) (decknix-review-board--insert-row row title-width))
           (insert (propertize "    (none)\n" 'face 'font-lock-comment-face)))
         (insert "\n")))
     (goto-char (point-min))
     (forward-line (1- line))))
+
+(defun decknix-review-board--on-resize (&rest _)
+  "Lay the board out again when its window's width changed.  Model only."
+  (when-let* ((buf (get-buffer decknix-review-board-buffer-name))
+              ((buffer-live-p buf)))
+    (with-current-buffer buf
+      (unless (eql decknix-review-board--rendered-width
+                   (decknix-review-board--window-width))
+        (decknix-review-board--render)))))
 
 ;; ── commands ─────────────────────────────────────────────────────────
 
@@ -638,6 +857,9 @@ verb that adds work, which is why it asks rather than acting on point."
 
 (defvar decknix-review-board--stale nil
   "Non-nil when a session's turn moved while the board was not on screen.")
+
+(setq decknix-review-board-prcache-changed-function
+      #'decknix-review-board-schedule-refresh)
 
 (defun decknix-review-board-refresh ()
   "Rebuild and re-render the board."
@@ -1067,6 +1289,9 @@ NAVIGATE
   RET / o         browse the PR on GitHub
   c / w           copy the PR URL(s) to the kill ring
   i               inspect: what this session is asking, or the PR detail
+  v               view the PR in *PR Review: repo#N*: description, CI,
+                  reviews, every thread by file, and the agent's saved plan
+                  (read-only; RET on a thread opens it on GitHub)
   j               jump to the session buffer
                   (and back: C-c C-b in a review session returns to its row)
   r               review a PR by url (paste one or several)
@@ -1079,14 +1304,17 @@ FILTERS
   Requests use the SAME filters as the sidebar (bots, drafts, age, CI,
   mentions).  Without them the board showed 30 rows where the sidebar
   showed 2.  Sessions are never filtered -- a running agent is a fact,
-  and a Finished session\'s PR has left the feed entirely.
+  and an Obsolete session\'s PR has left the feed entirely.
 
 MARK  (verbs act on the marked set, or the row at point when none marked)
   m / u           mark / unmark          U  unmark all
   M               mark every row in this lane
 
 ANSWER  (the row at point only; always asks first)
-  y               send \"yes\" to a session asking yes/no or yes/edit/cancel
+  y               on a crashed session (lost its link): reset it and send
+                  `continue\'; on a stalled one: nudge it on to its gate
+                  (`decknix-review-board-nudge-prompt\'); otherwise send
+                  \"yes\" to a session asking yes/no or yes/edit/cancel
   1-9             send that number to a session offering a numbered choice;
                   refused when it offered no such option
   The row says what each wants: `reply yes/edit/cancel', `reply 1-3, rec 1'.
@@ -1113,24 +1341,43 @@ ACT
                   (message + needs you in the sidebar) / auto (start the
                   re-review); see `decknix-review-board-auto-rereview\'
 
-COLUMNS
-  m               `*' when marked
-  badge           see below
-  phase           the session's glyph (see PHASES), `\u00b7' when nobody is on it
-  pri             priority score -- higher sorts first
-  state           the phase, then what it waits on, or `no session'
+LANES
+  Needs you       asked you something, or crashed on the network
+  Re-review       the author pushed since the review
+  Stalled         stopped short of its gate without asking: `y\' nudges
+  In progress     assessing, revising, or posting your answer
+  Waiting on others  PR in draft, or the review handed to someone else
+                  (the session said so, or another reviewer approved)
+  Posted          your review is on GitHub          (most recent first)
+  Obsolete        PR merged or closed: `k\' it     (most recent first)
+
+COLUMNS  (labels pinned in the header line)
+  m               `*\' when marked
+  st              staleness badge, see BADGES
+  s               the session's glyph (see PHASES), `·\' when nobody is on it
+  pri             priority score, higher sorts first; hover for the breakdown
+  pr, title       the PR; a merged one keeps its title from the cache
+  author          short login, ⚙ for a bot
+  age/quiet       how old the PR is / how long since anything moved
+  c               CI: ✓ pass, ✗ fail, ◐ running
+  me              my prior review: A approved, CR changes, C commented
+  thr             open threads: hN human, bN bot
+  phase           the phase, then what it waits on, or `no session\'
 
 PHASES  (where a review is in /review-service-pr: assess, gate, post)
   \u2691  awaiting you  the plan is ready: verdict shown, with the reply it
                  wants (`reply 1-3, rec 1', `reply yes/edit/cancel')
-  \u2691  asking        any other question; `permission' and `netfail' too
+  ⚑  asking        any other question; `permission\' too
+  ✖  crashed       the last message is a network failure (red); y
+  ⚑  stalled       stopped without posting or asking; y nudges it
+  →  handed off    another reviewer has it (grey, Waiting on others)
   \u25d0  assessing     reading the PR; you have not answered it yet
   \u25d0  revising      changing the plan after you said edit
   \u25d1  posting       acting on your go-ahead: posting the review
   \u25cf  actioned      it acted on your go-ahead but reported no review link;
                  `i' to see what happened
   \u2713  posted        the review is on GitHub (the session said so, or
-                 the feed has your review); filed under Finished
+                 the feed has your review); filed under Posted
   \u2691  updated       the author pushed after the review (yours with
                  feedback, or another reviewer\'s while your session sat
                  finished); filed under Re-review with what changed:
@@ -1140,7 +1387,9 @@ PHASES  (where a review is in /review-service-pr: assess, gate, post)
 
 BADGES
   \u2298   gone       PR left your review queue (merged / closed).  The
-                 session is finished work; `k' it.
+                 session is obsolete; `k\' it.  Its row says merged or
+                 closed (asked of GitHub once, kept on disk), and a
+                 question it was asking reads `moot\'.
   \u21bb   stale      author pushed since -- the analysis is void
   \u2611   answered   someone else responded; may be redundant
 
@@ -1155,7 +1404,11 @@ PRIORITY  (why the numbers look the way they do)
     plus     age, +1/day, capped at +14
 
   So a bot PR nobody has asked you about scores 10 - 35 = -25.  That is
-  it saying `real, but not next'.  Hover a row for its breakdown."
+  it saying `real, but not next'.  Hover a row for its breakdown.
+
+COLOURS  (the sidebar's)
+  red failed or crashed, amber waiting on you, plain in flight, green
+  done, grey quiet (waiting on others, obsolete, no session)."
   "Help text for `decknix-review-board-help'.
 
 Spelled out rather than deferred to `describe-mode' because the two
@@ -1299,23 +1552,85 @@ answering it from a screen that shows only a row."
                             (window-height . 0.45)
                             (inhibit-same-window . t))))))
 
-(defun decknix-review-board-reply ()
-  "Answer the question of the session at point with the key just pressed.
+(defcustom decknix-review-board-nudge-prompt
+  "You stopped without reaching the review's confirmation gate. Carry on from where you left off: finish the analysis, present the complete plan, and stop at the gate for my answer. Do not post anything yet."
+  "What `y' sends to a stalled review session.
+It asks for the gate, never for a post, so a nudge cannot route around
+the confirmation the review command requires."
+  :type 'string
+  :group 'decknix-review-board)
 
-`y' sends \"yes\" to a session asking yes or no (or offering yes among
-its words); `1'-`9' send that option's number to one offering a numbered
-choice.  The row at point only, never the marked set: one keystroke
-answering several gates at once would post several reviews.  Always asks
-first, naming the session, the text and the option, and refuses a key
-the question did not offer (see `decknix-agent-turn-quick-reply')."
+(defun decknix-review-board--send (buf prompt)
+  "Send PROMPT to BUF through the bulk dispatcher: now if idle, else queued."
+  (if (fboundp 'decknix--session-bulk-dispatch)
+      (decknix--session-bulk-dispatch (list buf) prompt)
+    (user-error "Session dispatch is not loaded")))
+
+(defun decknix-review-board--resume-crashed (row buf)
+  "Reset ROW's session BUF after a network failure and send it `continue'."
+  (when (yes-or-no-p (format "%s lost its link%s.  Reset it and send \"%s\"? "
+                             (buffer-name buf)
+                             (if-let* ((d (plist-get row :netfail)))
+                                 (format " (%s)" d) "")
+                             (if (boundp 'decknix-agent-net-error-retry-prompt)
+                                 decknix-agent-net-error-retry-prompt
+                               "continue")))
+    (when (fboundp 'decknix--agent-net-error-reset-buffer)
+      (decknix--agent-net-error-reset-buffer buf))
+    (decknix-review-board--send buf (if (boundp 'decknix-agent-net-error-retry-prompt)
+                                        decknix-agent-net-error-retry-prompt
+                                      "continue"))
+    t))
+
+(defun decknix-review-board--nudge (buf)
+  "Ask before sending BUF the nudge prompt."
+  (when (yes-or-no-p (format "Nudge %s on to its review gate?  It is sent: \"%s\" "
+                             (buffer-name buf)
+                             (truncate-string-to-width decknix-review-board-nudge-prompt 60
+                                                       nil nil "…")))
+    (decknix-review-board--send buf decknix-review-board-nudge-prompt)
+    t))
+
+(defun decknix-review-board-reply ()
+  "Answer, nudge or resume the session at point with the key just pressed.
+
+`y' on a crashed session (lost its link) resets it and sends `continue';
+on a stalled one (stopped without asking) it sends
+`decknix-review-board-nudge-prompt'.  Otherwise `y' sends \"yes\" to a
+session asking yes or no (or offering yes among its words), and `1'-`9'
+send that option's number to one offering a numbered choice.  The row at
+point only, never the marked set: one keystroke answering several gates
+at once would post several reviews.  Always asks first, naming the
+session and what is sent, and refuses a key the question did not offer
+\(see `decknix-agent-turn-quick-reply')."
   (interactive)
   (let* ((row (decknix-review-board--row-at-point))
          (buf (and row (plist-get row :buffer)))
-         (key (decknix-agent-turn-reply-key last-command-event)))
+         (key (decknix-agent-turn-reply-key last-command-event))
+         (phase (plist-get row :phase))
+         (yes (eq last-command-event ?y)))
     (unless (buffer-live-p buf) (user-error "No session on this row"))
     (unless key (user-error "Not a reply key"))
-    (when (decknix-agent-turn-quick-reply buf key)
+    (when (cond
+           ((and yes (eq phase 'netfail)) (decknix-review-board--resume-crashed row buf))
+           ((and yes (eq phase 'stalled)) (decknix-review-board--nudge buf))
+           (t (decknix-agent-turn-quick-reply buf key)))
       (decknix-review-board-schedule-refresh))))
+
+(defun decknix-review-board-view ()
+  "Open the PR at point in a review buffer: description, CI, threads, plan.
+Read-only for now.  Everything it shows is fetched in the background, so
+it opens at once and fills in."
+  (interactive)
+  (let* ((row (or (decknix-review-board--row-at-point)
+                  (user-error "No row here")))
+         (url (decknix-review-board-row-url row))
+         (parsed (decknix-review-board--parse-pr-url url)))
+    (unless parsed (user-error "No PR url for this row"))
+    (unless (fboundp 'decknix-pr-review-view-open)
+      (user-error "The PR review view is not loaded"))
+    (decknix-pr-review-view-open (alist-get 'owner parsed) (alist-get 'repo parsed)
+                                 (string-to-number (alist-get 'number parsed)) url)))
 
 (defun decknix-review-board-toggle-auto-dismiss ()
   "Toggle whether finished sessions drop off the board automatically.
@@ -1512,6 +1827,7 @@ the board closed."
     (define-key map (kbd "x") #'decknix-review-board-toggle-auto-dismiss)
     (define-key map (kbd "f") #'decknix-review-board-toggle-filters)
     (define-key map (kbd "i") #'decknix-review-board-inspect)
+    (define-key map (kbd "v") #'decknix-review-board-view)
     (define-key map (kbd "y") #'decknix-review-board-reply)
     (define-key map (kbd "R") #'decknix-review-board-rereview)
     (define-key map (kbd "X") #'decknix-review-board-cycle-auto-rereview)
@@ -1538,8 +1854,11 @@ verb that approved directly would route around it.")
   "Major mode for the review worklist."
   (setq truncate-lines t)
   (buffer-disable-undo)
+  (setq header-line-format '(:eval (decknix-review-board--header-line)))
   (add-hook 'window-buffer-change-functions
-            #'decknix-review-board-refresh-if-stale nil t))
+            #'decknix-review-board-refresh-if-stale nil t)
+  (add-hook 'window-size-change-functions
+            #'decknix-review-board--on-resize nil t))
 
 ;;;###autoload
 (defun decknix-review-board ()

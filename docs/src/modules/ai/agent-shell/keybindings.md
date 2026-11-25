@@ -321,27 +321,78 @@ comint's previous prompt, hence `C-c C-j` for open.
 `C-c s B` opens the Review Board: every live review session and every
 review request, in lanes. Each session row leads with where its review is
 in `/review-service-pr`, which assesses the PR, stops at a confirmation
-gate, then posts once you answer:
+gate, then posts once you answer.
+
+The header is two lines: counts and policies, then the daily keys. The
+column labels are pinned in the header line.
+
+```
+Review Board  27 rows  ⚑ 2 need you  1 stalled   filtered · auto-review [any] · re-review [notify] · auto-dismiss [off]
+  RET open  v view  i inspect  j jump  y/1-9 answer, nudge or resume  d dispatch  k quit  s merge  R re-review  g refresh  ? all keys
+m st s   pri  pr                       title                author      age/quiet c me thr    phase
+Needs you (2)  asked you, or lost its link: answer or y
+     ✖    35  widget-service#410       Bump the spring gro… dependabot⚙ 2d/40m    ✓    b1     crashed  y resets and resumes
+     ⚑    50  web-app#22335            ABC-123: Define eac… jo          1d/2h     ✓ C  h1     awaiting you  APPROVE · reply 1-3, rec 1
+Stalled (1)  stopped short of the gate without asking: y nudges it
+     ⚑    -5  api-gateway#1041         chore(deps): bump n… dependabot⚙ 4d/3h     ✓             stalled  y nudges it on
+Waiting on others (1)  PR in draft, or handed to another reviewer
+☑    →   -25  billing-integration#399  Bump the actions gr… dependabot⚙ 6d/1d     ✓             handed off  approved by sam
+Posted (1)  your review is on GitHub
+     ✓    21  task-tools#27            feat(tasks): tasks_… ana         3d/1h     ✓ A           posted
+Obsolete (2)  PR merged or closed: safe to quit
+⊘    ⚑     0  infra-prd#360            Promote api to prd   ana         5d/2h     ·             merged  asking  moot
+⊘    ●     0  web-app#22324            Fix the importer     jo          8d/6h     ·             closed  stalled  moot
+```
+
+| Lane | Holds |
+|------|-------|
+| Needs you | Sessions that asked you something, or crashed on the network |
+| Re-review | PRs the author pushed to after the review |
+| Stalled | Sessions that stopped short of the gate without asking: `y` nudges them on |
+| In progress | Assessing, revising, or posting your answer |
+| Waiting on others | PR back in draft, or the review handed to another reviewer (the session said so, or someone else approved and you have not reviewed) |
+| Posted | Your review is on GitHub. Most recent first |
+| Obsolete | PR merged or closed: `k` the session. Most recent first; the row says `merged` or `closed` (asked of GitHub once per PR in the background, kept in `~/.local/state/decknix/review-board-prs.eld` with the PR's title and author), and a question the session was asking reads `moot` |
+| Grouped / Idle | Requests nobody is on yet: bot PRs folded per service, human ones listed |
 
 | Glyph | Phase | Meaning |
 |-------|-------|---------|
-| `⚑` | awaiting you | The plan is presented. The row shows the verdict and the reply wanted, e.g. `APPROVE · reply 1-3, rec 1`. Listed under Needs you |
-| `⚑` | asking / permission / netfail | Blocked on you for anything else |
+| `✖` (red) | crashed | The session's last message is a network failure (a first prompt that failed on `ENOTFOUND` included). Needs you; `y` resets it and sends `continue` |
+| `⚑` (amber) | awaiting you | The plan is presented. The row shows the verdict and the reply wanted, e.g. `APPROVE · reply 1-3, rec 1` |
+| `⚑` (amber) | asking / permission | Blocked on you for anything else |
+| `⚑` (amber) | stalled | Stopped without posting or asking anything. Filed under Stalled |
 | `◐` | assessing | Reading the PR; you have not answered it yet |
 | `◐` | revising | Changing the plan after you asked for an edit |
 | `◑` | posting | Acting on your go-ahead, with the verdict being posted |
 | `●` | actioned | Settled after your go-ahead without reporting a review link (a failed submit looks like this); `i` to see |
-| `✓` | posted | The review is on GitHub (the session linked it, or the feed has your review). Filed under Finished |
-| `⚑` | updated | The author pushed after the review. Filed under Re-review, with what changed (see below) |
-| `●` | idle | Settled, nothing in flight |
+| `✓` (green) | posted | The review is on GitHub (the session linked it, or the feed has your review). Filed under Posted |
+| `→` (grey) | handed off | Another reviewer has it. Filed under Waiting on others |
+| `⚑` (amber) | updated | The author pushed after the review. Filed under Re-review, with what changed (see below) |
+| `●` (grey) | idle | Closing or watching, nothing in flight |
+
+Colours are the sidebar's (its severity face function): red failed, amber
+waiting on you, plain in flight, green done, grey quiet.
+
+| Column | Shows |
+|--------|-------|
+| `st` | Staleness badge: `⊘` gone, `↻` stale, `☑` answered by someone else |
+| `pri` | Priority; hover the row for its breakdown |
+| `author` | Short login, `⚙` for a bot |
+| `age/quiet` | How old the PR is / how long since anything moved |
+| `c` | CI: `✓` pass, `✗` fail, `◐` running |
+| `me` | My prior review: `A` approved, `CR` changes requested, `C` commented |
+| `thr` | Open threads: `hN` human, `bN` bot |
+
+The title column takes the width left in the window.
 
 | Key | Action |
 |-----|--------|
 | `n` / `p`, `TAB` | Next / previous row |
 | `RET` / `o` | Open the PR in the browser |
+| `v` | View the PR in `*PR Review: repo#N*` (see below) |
 | `i` | Inspect: the session's state, phase and last lines, or the PR detail |
 | `j` | Go to the session |
-| `y` | Send "yes" to the session at point, when it asks yes/no or `(yes / edit / cancel)`. Always confirms first |
+| `y` | On a crashed session: reset it and send `continue`. On a stalled one: send `decknix-review-board-nudge-prompt` (finish, present the plan, stop at the gate). Otherwise send "yes" when it asks yes/no or `(yes / edit / cancel)`. Always confirms first |
 | `1`-`9` | Send that number to the session at point, when it offers a numbered choice. Confirms first, naming the option and the verdict at stake; refused when out of range |
 | `m` / `u` / `U` / `M` | Mark, unmark, unmark all, mark the lane |
 | `d` | Dispatch review sessions for the marked rows |
@@ -350,8 +401,23 @@ gate, then posts once you answer:
 | `r` | Review PR url(s) pasted from anywhere |
 | `R` | Re-review a PR updated since the review (`C-u R` acknowledges the push instead) |
 | `X` | Cycle what an update does: off / notify / auto |
-| `A` / `x` / `f` | Cycle auto-review, toggle auto-dismiss, toggle filters |
+| `A` / `x` / `f` | Cycle auto-review, toggle auto-dismiss (drops Obsolete rows), toggle filters |
 | `g` / `?` | Refresh / full help |
+
+### Reading a review in Emacs (`v`)
+
+`v` opens `*PR Review: repo#N*` for the row's PR, read-only: its summary,
+the agent's plan, the description, CI (failures first), the reviews so
+far, and every review thread grouped by file, open ones first and with
+their whole conversation. Threads are fetched page by page, so a large PR
+is never cut short. The plan is the one `/review-service-pr` saved at
+`~/.local/state/decknix/reviews/<owner>/<repo>/<n>/plan.json` (verdict,
+body, inline comments, bot reactions), when there is one.
+
+Every `gh` call runs in the background: the buffer opens at once and each
+section fills in. `n` / `p` move between threads, `RET` opens the thread on
+GitHub, `o` the PR, `g` fetches again, `q` quits. Replying and resolving
+are later steps.
 
 From a review session, `C-c C-b` (or `b` in its transcript) comes back to its
 row here.
@@ -360,7 +426,7 @@ row here.
 
 When you reviewed a PR with feedback (changes requested, a comment, a body,
 or a thread you opened) and the author answers by pushing to the same PR,
-the row leaves Finished for the **Re-review** lane, second from the top.
+the row leaves Posted for the **Re-review** lane, second from the top.
 The same happens when another reviewer's feedback was what your finished
 session was waiting on. The row says what moved: commits since the review,
 files changed, how many of your threads are resolved or replied to, whether
