@@ -491,5 +491,18 @@
             (decknix-agent-net-resume--loaded nil))
         (should (eq (plist-get (decknix-agent-net-resume-record a) :class) 'network))))))
 
+(ert-deftest decknix-net-resume--refused-submit-keeps-the-session-flagged ()
+  "A resume whose submit is refused leaves the session showing netfail.
+The flag is cleared before the submit so the prompt can land; when it does
+not land, clearing it anyway made a dead session read as ready."
+  (decknix-net-resume-test--with-env
+    (let ((a (decknix-net-resume-test--session "a"))
+          (decknix-agent-net-resume-submit-function (lambda (_b _input) nil)))
+      (decknix-net-resume-test--fail a "API Error: Unable to connect to API (ENOTFOUND)")
+      (decknix-agent-net-resume--resume-one a)
+      (should (eq (plist-get (decknix-agent-net-resume-record a) :skipped) 'submit-refused))
+      (should (equal (decknix-agent-net-error-reason a)
+                     "API Error: Unable to connect to API (ENOTFOUND)")))))
+
 (provide 'decknix-agent-net-resume-test)
 ;;; decknix-agent-net-resume-test.el ends here

@@ -441,5 +441,66 @@ session that died this way was never flagged until a manual rescan."
   (should-not (decknix--agent-net-error-p
                "**Pi error (x/y):** Codex error: The usage limit has been reached")))
 
+;; --- the error box agent-shell draws on a failed prompt -----------------
+
+(defconst decknix-net-error-test--error-box
+  (concat "Claude> /review-service-pr https://github.com/o/r/pull/1\n\n"
+          "╭─\n\n"
+          "  ⚠ Error (-32603) ⚠\n\n"
+          "  Internal error: API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)\n\n"
+          "  Details\n\n"
+          "╰─\n\n"
+          "Claude> ")
+  "What a session shows after its first prompt failed on the network.
+`agent-shell--make-error-dialog-text' frames the JSON-RPC message in box
+art with a Details button, and the prompt follows it.")
+
+(ert-deftest decknix-net-error--rescan-reads-the-error-box ()
+  "A rescan finds the failure in the error box a failed prompt leaves.
+The box's line carries the bridge's `Internal error: ' wrapper, which the
+report shape rejected, and its art and button pushed the line out of the
+tail, so a rescan (startup sweep, list, reset, retry) cleared the flag
+the `error' event had set."
+  (should (equal (decknix--agent-net-error-p decknix-net-error-test--error-box)
+                 "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)")))
+
+(ert-deftest decknix-net-error--error-box-for-a-limit-is-not-network ()
+  "The same box around a weekly limit stays unflagged."
+  (should-not (decknix--agent-net-error-p
+               (replace-regexp-in-string
+                "API Error: Can't reach.*(ENOTFOUND)"
+                "You've hit your weekly limit · resets 12pm"
+                decknix-net-error-test--error-box))))
+
+(ert-deftest decknix-net-error--rescan-keeps-the-error-event-flag ()
+  "A rescan that cannot see the failure keeps what the `error' event set.
+The event's message is the stronger evidence: it is the failure itself,
+not text that might have scrolled out of the scan window."
+  (let ((buf (generate-new-buffer " *net-keep*")))
+    (unwind-protect
+        (progn
+          (decknix--agent-net-error-handle-event
+           buf 'error '((:message . "Internal error: API Error: Unable to connect to API (ENOTFOUND)")))
+          (should (decknix-agent-net-error-scan-buffer buf))
+          (should (decknix-agent-net-error-flagged-p buf))
+          ;; The next prompt starts a new turn: the event flag goes with it.
+          (decknix--agent-net-error-handle-event buf 'input-submitted nil)
+          (with-current-buffer buf (insert "All good now.\n"))
+          (should-not (decknix-agent-net-error-scan-buffer buf))
+          (should-not (decknix-agent-net-error-flagged-p buf)))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-net-error--clear-drops-the-event-flag-too ()
+  "An explicit clear (the reset) is not undone by the next rescan."
+  (let ((buf (generate-new-buffer " *net-clear*")))
+    (unwind-protect
+        (progn
+          (decknix--agent-net-error-handle-event
+           buf 'error '((:message . "Internal error: API Error: Unable to connect to API (ENOTFOUND)")))
+          (decknix-agent-net-error-clear buf)
+          (should-not (decknix-agent-net-error-scan-buffer buf))
+          (should-not (decknix-agent-net-error-flagged-p buf)))
+      (kill-buffer buf))))
+
 (provide 'decknix-agent-net-error-test)
 ;;; decknix-agent-net-error-test.el ends here

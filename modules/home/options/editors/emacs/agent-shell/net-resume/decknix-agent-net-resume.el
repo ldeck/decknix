@@ -806,13 +806,15 @@ the two costs an attempt rather than repeating one."
                      (decknix-agent-net-resume--facts buffer))))
       (if (not (eq decision 'resume))
           (decknix-agent-net-resume--update buffer :skipped decision)
-        (let* ((rec (decknix-agent-net-resume-record buffer))
+        (let* ((reason nil)
+               (rec (decknix-agent-net-resume-record buffer))
                (attempt (1+ (or (plist-get rec :attempts) 0)))
                (prompt (decknix-agent-net-resume-prompt-for
                         (plist-get rec :class) attempt
                         decknix-agent-net-resume-max-attempts)))
           (decknix-agent-net-resume--update buffer :attempts attempt
                                             :last (float-time) :resumed t)
+          (setq reason (decknix-agent-net-error-reason buffer))
           (decknix--agent-net-error-reset-buffer buffer)
           (with-current-buffer buffer
             (setq decknix-agent-net-resume--submitting t))
@@ -825,6 +827,9 @@ the two costs an attempt rather than repeating one."
               (with-current-buffer buffer
                 (setq decknix-agent-net-resume--submitting nil)))
             (unless sent
+              ;; The reset made room for a prompt that never landed: the
+              ;; session is as dead as before, so it must still say so.
+              (decknix-agent-net-error-mark buffer reason)
               (decknix-agent-net-resume--update buffer :skipped 'submit-refused)
               (message "↻ Could not resume %s: the submit was refused"
                        (buffer-name buffer))))

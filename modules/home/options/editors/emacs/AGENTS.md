@@ -1287,6 +1287,17 @@ Notes:
   `turn-complete` and emits `error`, so the `error` event is observed too and
   its message (wrapper stripped) goes through the same test. A weekly limit
   arrives the same way with `errorKind: "rate_limit"` and stays unflagged.
+  This is also how a session's **first** prompt fails (and `initialize` or
+  `session/new` before it): there is never a `turn-complete` to scan, only
+  `error`.
+- **A rescan agrees with the event.** The failed prompt leaves agent-shell's
+  error box in the buffer: box art, `⚠ Error (-32603) ⚠`, the message with
+  its `Internal error: ` wrapper, a Details button. The tail scan strips the
+  wrapper per line and skips the art and the button, so the startup sweep and
+  the bulk commands find the failure instead of clearing the flag the event
+  set. A flag set by the `error` event is also kept by a rescan that finds no
+  line (`decknix--agent-net-error-from-event`), until the next prompt or an
+  explicit reset.
 - **Pi** reports a provider failure as `**Pi error (provider/model):** detail`
   then ends the turn normally (`pkgs/pi-acp/surface-provider-errors.patch`).
   Bold markers are stripped before matching and `Pi error` is a report
@@ -1340,6 +1351,8 @@ answers again. User docs: `docs/src/modules/ai/agent-shell/network-resume.md`.
   busy (`shell-maker--busy`), unsent prompt or compose text, queued prompt,
   cap reached, under the 30 s minimum interval, or not yet due. A skip for
   typing/asking/busy is spent on that failure, never queued.
+  A refused submit re-flags the session: the reset cleared the flag so the
+  prompt could land, and a dead session must not then read as ready.
 - **Own submit vs user input.** `decknix-agent-net-resume--submitting` is set
   around the submit (`decknix--compose-submit-after-wait`); upstream emits
   `input-submitted` synchronously inside it, so that event is ours. Any other

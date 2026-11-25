@@ -176,19 +176,39 @@ sends a prompt, so anything listed here will be retried on your behalf."
 ;; Pure layer -- ERT-tested.
 ;; ---------------------------------------------------------------------------
 
+(defconst decknix-agent-net-error-rpc-prefix-regexp
+  (rx string-start (0+ space) "Internal error" (0+ space) ":" (0+ space))
+  "Wrapper the ACP bridge puts around an API failure in a JSON-RPC error.")
+
 (defun decknix--agent-net-error-strip-fences (text)
   "Return TEXT with fenced code blocks removed.
 An error line quoted inside a fence is source -- a pattern list, a log
 excerpt pasted for review -- not an incident this session suffered."
   (replace-regexp-in-string "```[^\0]*?```" "" (or text "")))
 
+(defconst decknix-agent-net-error-chrome-regexp
+  (rx string-start (or (+ (any "─│╭╮╰╯ ")) "Details") string-end)
+  "A line of agent-shell's error box that carries no words: art or button.")
+
+(defun decknix--agent-net-error-clean-line (line)
+  "Return LINE as a report would read: trimmed, unbolded and unwrapped.
+The `Internal error: ' wrapper the ACP bridge puts on a JSON-RPC failure
+is stripped, so the line agent-shell's error box shows for a failed
+prompt reads as the API report inside it."
+  (replace-regexp-in-string
+   decknix-agent-net-error-rpc-prefix-regexp ""
+   (string-trim (string-replace "**" "" line))))
+
 (defun decknix--agent-net-error-tail-lines (text n)
   "Return the last N non-blank lines of TEXT, in order.
 Markdown bold markers are dropped, so Pi's `**Pi error:** ...' reads as
-the report it is."
-  (let ((lines (seq-remove #'string-empty-p
-                           (mapcar (lambda (line)
-                                     (string-trim (string-replace "**" "" line)))
+the report it is.  Lines of the error box's art and its Details button
+are skipped: they would otherwise push the failure out of the last N."
+  (let ((lines (seq-remove (lambda (line)
+                             (or (string-empty-p line)
+                                 (string-match-p decknix-agent-net-error-chrome-regexp
+                                                 line)))
+                           (mapcar #'decknix--agent-net-error-clean-line
                                    (split-string (or text "") "\n")))))
     (if (<= (length lines) n)
         lines
@@ -277,6 +297,14 @@ never dispatch into a killed session."
 (defvar-local decknix--agent-net-error-reason nil
   "The failure line this session's last turn died on, or nil.")
 
+(defvar-local decknix--agent-net-error-from-event nil
+  "Non-nil when the flag was set by this turn's `error' event.
+
+The event's message is the failure itself, so a rescan that cannot find
+the line (scrolled out of the window, or drawn somewhere the tail does
+not reach) keeps the flag instead of clearing it.  Cleared with the flag,
+and by the next prompt.")
+
 (defvar-local decknix--agent-net-error-turn-start nil
   "Marker at which the current/last turn's output began, or nil.
 
@@ -317,7 +345,8 @@ the surviving text instead, which is the floor we wanted anyway.")
   (let ((buf (or buffer (current-buffer))))
     (when (buffer-live-p buf)
       (with-current-buffer buf
-        (setq decknix--agent-net-error-reason nil)))))
+        (setq decknix--agent-net-error-reason nil
+              decknix--agent-net-error-from-event nil)))))
 
 (defun decknix-agent-net-error-mark-turn-start (&optional buffer)
   "Record where BUFFER's current turn begins, as the scan floor.
@@ -362,6 +391,8 @@ See `decknix--agent-net-error-scan-floor'."
 Sets the flag when the turn ended on a failure and CLEARS a stale one
 when it did not, so a session that recovered on its own is never
 re-prompted by the bulk retry.  Returns the failure line, or nil.
+A flag the turn's `error' event set is kept when the text shows nothing
+\(see `decknix--agent-net-error-from-event').
 
 Reading the buffer rather than the ACP stream deliberately: it is the one
 seam that sees both the agent's own error text and the fragment
@@ -370,10 +401,11 @@ until a turn ends or a rescan is asked for."
   (when (buffer-live-p buffer)
     (let ((reason (decknix--agent-net-error-p
                    (decknix--agent-net-error-buffer-tail buffer))))
-      (if reason
-          (decknix-agent-net-error-mark buffer reason)
-        (decknix-agent-net-error-clear buffer))
-      reason)))
+      (cond
+       (reason (decknix-agent-net-error-mark buffer reason))
+       ((buffer-local-value 'decknix--agent-net-error-from-event buffer)
+        (decknix-agent-net-error-reason buffer))
+       (t (decknix-agent-net-error-clear buffer) nil)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Event layer -- what each turn boundary does to the flag.
@@ -387,10 +419,6 @@ boundary, flagged or not, so a listener (the auto-resume in
 taking it over.  A listener error is demoted to a message: these run
 inside advice on `agent-shell--emit-event', where a signal would stop
 the event reaching agent-shell's own subscribers.")
-
-(defconst decknix-agent-net-error-rpc-prefix-regexp
-  (rx string-start (0+ space) "Internal error" (0+ space) ":" (0+ space))
-  "Wrapper the ACP bridge puts around an API failure in a JSON-RPC error.")
 
 (defun decknix-agent-net-error-event-reason (message)
   "Return the network failure in a JSON-RPC error MESSAGE, or nil.
@@ -430,7 +458,9 @@ the flag and moves the scan floor.  Returns the failure line, if any."
               (let ((line (decknix-agent-net-error-event-reason
                            (cdr (assq :message data)))))
                 (if line
-                    (decknix-agent-net-error-mark buffer line)
+                    (with-current-buffer buffer
+                      (setq decknix--agent-net-error-from-event t)
+                      (decknix-agent-net-error-mark buffer line))
                   (decknix-agent-net-error-scan-buffer buffer))))
              ('input-submitted
               (decknix-agent-net-error-clear buffer)
