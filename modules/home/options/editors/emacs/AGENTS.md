@@ -1255,7 +1255,7 @@ Two seams (registered in the heredoc per Rule 2):
 
 | Seam | Advice | Does |
 |------|--------|------|
-| `agent-shell--emit-event` | `:before` | scans the buffer tail on `turn-complete`; clears the flag on `input-submitted` |
+| `agent-shell--emit-event` | `:before` | scans the buffer tail on `turn-complete`; reads the message of a failed prompt's `error` event; clears the flag on `input-submitted` |
 | `agent-shell-workspace--buffer-status` | `:around` | refines a settled status → `netfail` |
 
 Notes:
@@ -1278,7 +1278,17 @@ Notes:
   the same wedge in a different costume); and it must be within the last few
   lines, i.e. the turn **ended** on it. Code fences are stripped first, so a
   matcher quoted in a diff is source rather than an incident.
-- **Zero hot-path cost**: only the two events that bracket a turn are observed —
+- **Two failure shapes.** The Claude bridge either streams the `API Error:` line
+  and ends the turn normally (`turn-complete`), or (seen from 2026-11-24)
+  answers `session/prompt` with JSON-RPC `-32603` `"Internal error: API Error:
+  Can't reach the API server ... (ENOTFOUND)"`, `data.errorKind:
+  "server_error"`. Upstream's error handler finishes that turn **without**
+  `turn-complete` and emits `error`, so the `error` event is observed too and
+  its message (wrapper stripped) goes through the same test. A weekly limit
+  arrives the same way with `errorKind: "rate_limit"` and stays unflagged.
+- `decknix-agent-net-error-change-functions` is called with `(BUFFER EVENT)`
+  after every boundary; the auto-resume (below) listens on it.
+- **Zero hot-path cost**: only the events that bracket a turn are observed —
   unlike the turn-signals chunk accumulator, nothing runs while output streams.
 - The bulk commands **rescan every live session first**, so a failure the
   streaming seam missed is still caught and one that has since recovered is left

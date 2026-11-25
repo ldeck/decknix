@@ -334,5 +334,90 @@ output of the turn actually being judged."
           (should (decknix-agent-net-error-scan-buffer buf)))
       (kill-buffer buf))))
 
+;; ---------------------------------------------------------------------
+;; The shapes Claude actually produced on 2026-11-24/25
+;; ---------------------------------------------------------------------
+
+(ert-deftest decknix-net-error--observed-claude-failures ()
+  "Every API Error line Claude transcripts recorded for a dropped link."
+  (dolist (line '("API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)"
+                  "API Error: Unable to connect to API (ENOTFOUND)"
+                  "API Error: Connection closed mid-response. The response above may be incomplete."
+                  "API Error: Stream idle timeout - no chunks received"))
+    (should (equal (decknix--agent-net-error-p line) line))))
+
+(ert-deftest decknix-net-error--limits-and-auth-are-not-network ()
+  "Quota and login failures are not something a reconnect clears."
+  (should-not (decknix--agent-net-error-p
+               "You've hit your weekly limit · resets 12pm (Australia/Sydney)"))
+  (should-not (decknix--agent-net-error-p
+               "Failed to authenticate: OAuth session expired and could not be refreshed"))
+  (should-not (decknix--agent-net-error-p "Not logged in · Please run /login")))
+
+(ert-deftest decknix-net-error--rpc-error-message-unwrapped ()
+  "A JSON-RPC prompt failure carries the API line behind `Internal error: '."
+  (should (equal (decknix-agent-net-error-event-reason
+                  "Internal error: API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)")
+                 "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)"))
+  (should-not (decknix-agent-net-error-event-reason
+               "Internal error: You've hit your weekly limit · resets 12pm (Australia/Sydney)"))
+  (should-not (decknix-agent-net-error-event-reason "Internal error"))
+  (should-not (decknix-agent-net-error-event-reason nil)))
+
+(ert-deftest decknix-net-error--error-event-flags-the-session ()
+  "The `error' event, not `turn-complete', is what a failed prompt emits.
+Upstream's error handler finishes the turn without `turn-complete', so a
+session that died this way was never flagged until a manual rescan."
+  (let ((buf (generate-new-buffer " *net-rpc*"))
+        (seen nil))
+    (unwind-protect
+        (let ((decknix-agent-net-error-change-functions
+               (list (lambda (b event) (push (cons b event) seen)))))
+          (decknix--agent-net-error-handle-event
+           buf 'error
+           '((:code . -32603)
+             (:message . "Internal error: API Error: Unable to connect to API (ECONNRESET)")))
+          (should (equal (decknix-agent-net-error-reason buf)
+                         "API Error: Unable to connect to API (ECONNRESET)"))
+          (should (equal seen (list (cons buf 'error))))
+          (decknix--agent-net-error-handle-event buf 'input-submitted nil)
+          (should-not (decknix-agent-net-error-flagged-p buf))
+          (should (equal (car seen) (cons buf 'input-submitted))))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-net-error--error-event-keeps-a-non-network-failure-unflagged ()
+  "A rate-limit or auth failure on the error path leaves the flag clear."
+  (let ((buf (generate-new-buffer " *net-rpc*")))
+    (unwind-protect
+        (progn
+          (decknix--agent-net-error-handle-event
+           buf 'error '((:message . "Internal error: You've hit your weekly limit")))
+          (should-not (decknix-agent-net-error-flagged-p buf)))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-net-error--turn-complete-scans-and-notifies ()
+  "A turn that ends on the failure line is flagged and reported once."
+  (let ((buf (generate-new-buffer " *net-turn*"))
+        (seen nil))
+    (unwind-protect
+        (let ((decknix-agent-net-error-change-functions
+               (list (lambda (b event) (push (cons b event) seen)))))
+          (with-current-buffer buf
+            (insert "API Error: Unable to connect to API (ENOTFOUND)\n"))
+          (decknix--agent-net-error-handle-event buf 'turn-complete nil)
+          (should (decknix-agent-net-error-flagged-p buf))
+          (should (equal seen (list (cons buf 'turn-complete)))))
+      (kill-buffer buf))))
+
+(ert-deftest decknix-net-error--a-failing-hook-never-breaks-the-event ()
+  "A listener error is demoted: the event still reaches agent-shell."
+  (let ((buf (generate-new-buffer " *net-turn*")))
+    (unwind-protect
+        (let ((decknix-agent-net-error-change-functions
+               (list (lambda (_b _e) (error "boom")))))
+          (with-current-buffer buf (insert "API Error: socket hang up\n"))
+          (should (decknix--agent-net-error-handle-event buf 'turn-complete nil)))
+      (kill-buffer buf))))
+
 (provide 'decknix-agent-net-error-test)
 ;;; decknix-agent-net-error-test.el ends here

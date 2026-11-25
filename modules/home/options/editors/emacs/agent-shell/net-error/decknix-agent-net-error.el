@@ -152,6 +152,8 @@ file -- from being flagged and bulk-prompted; see the Commentary.")
        ;; Transport failures that carry no errno.
        "socket hang up" "fetch failed" "network timeout"
        "Unable to connect" "unable to connect"
+       "Can't reach the API server"
+       "Connection closed mid-response" "Stream idle timeout"
        "Premature close" "terminated"
        ;; Transient HTTP: overloaded / rate-limited / gateway / timeout.
        ;; 4xx that are NOT transient (401, 403, 400) are excluded on
@@ -366,6 +368,72 @@ until a turn ends or a rescan is asked for."
       reason)))
 
 ;; ---------------------------------------------------------------------------
+;; Event layer -- what each turn boundary does to the flag.
+;; ---------------------------------------------------------------------------
+
+(defvar decknix-agent-net-error-change-functions nil
+  "Functions called with (BUFFER EVENT) after a turn boundary re-derives the flag.
+EVENT is `turn-complete', `error' or `input-submitted'.  Run on every
+boundary, flagged or not, so a listener (the auto-resume in
+`decknix-agent-net-resume') sees both a session dying and the user
+taking it over.  A listener error is demoted to a message: these run
+inside advice on `agent-shell--emit-event', where a signal would stop
+the event reaching agent-shell's own subscribers.")
+
+(defconst decknix-agent-net-error-rpc-prefix-regexp
+  (rx string-start (0+ space) "Internal error" (0+ space) ":" (0+ space))
+  "Wrapper the ACP bridge puts around an API failure in a JSON-RPC error.")
+
+(defun decknix-agent-net-error-event-reason (message)
+  "Return the network failure in a JSON-RPC error MESSAGE, or nil.
+
+A prompt that fails this way (the Claude bridge does it since late 2026)
+answers `session/prompt' with code -32603 and a message such as
+\"Internal error: API Error: Can't reach the API server ... (ENOTFOUND)\".
+The wrapper is stripped so the same report-and-transient test as the
+transcript scan decides, which keeps a weekly limit or a login failure
+on this path unflagged too."
+  (when (stringp message)
+    (decknix--agent-net-error-p
+     (replace-regexp-in-string decknix-agent-net-error-rpc-prefix-regexp ""
+                               message))))
+
+(defun decknix--agent-net-error-run-change-functions (buffer event)
+  "Run `decknix-agent-net-error-change-functions' for BUFFER and EVENT."
+  (dolist (fn decknix-agent-net-error-change-functions)
+    (with-demoted-errors "decknix-agent-net-error-change-functions: %S"
+      (funcall fn buffer event))))
+
+(defun decknix--agent-net-error-handle-event (buffer event data)
+  "Re-derive BUFFER's flag for agent-shell EVENT carrying DATA.
+
+`turn-complete' rescans the turn's own output.  `error' is the failed
+prompt: upstream's error handler finishes the turn WITHOUT
+`turn-complete', so before this was observed a session that died that
+way stayed unflagged until a bulk command rescanned it.  Its message is
+checked first, then the transcript, since the bridge also streams the
+API line as agent text just before failing.  `input-submitted' clears
+the flag and moves the scan floor.  Returns the failure line, if any."
+  (when (buffer-live-p buffer)
+    (let ((reason
+           (pcase event
+             ('turn-complete (decknix-agent-net-error-scan-buffer buffer))
+             ('error
+              (let ((line (decknix-agent-net-error-event-reason
+                           (cdr (assq :message data)))))
+                (if line
+                    (decknix-agent-net-error-mark buffer line)
+                  (decknix-agent-net-error-scan-buffer buffer))))
+             ('input-submitted
+              (decknix-agent-net-error-clear buffer)
+              (decknix-agent-net-error-mark-turn-start buffer)
+              nil)
+             (_ 'ignored))))
+      (unless (eq reason 'ignored)
+        (decknix--agent-net-error-run-change-functions buffer event)
+        (or reason t)))))
+
+;; ---------------------------------------------------------------------------
 ;; Live layer -- sensing seam, status advice, and the bulk reset.
 ;; ---------------------------------------------------------------------------
 
@@ -382,20 +450,14 @@ Installed as `:before' advice on `agent-shell--emit-event'.  Uses
 `decknix--agent-turn-observe-event' does: `agent-shell--emit-event' has
 already made the owning shell buffer current by the time it dispatches.
 
-Costs nothing per streamed chunk -- it only acts on the two events that
-bracket a turn -- so unlike a chunk accumulator it stays off the hot
-path entirely."
+Costs nothing per streamed chunk: it only acts on the events that
+bracket a turn (see `decknix--agent-net-error-handle-event'), so unlike
+a chunk accumulator it stays off the hot path entirely."
   (when (derived-mode-p 'agent-shell-mode)
-    (pcase (plist-get args :event)
-      ('turn-complete (decknix-agent-net-error-scan-buffer (current-buffer)))
-      ;; A new turn supersedes the last one's failure: whatever happens
-      ;; now is the session's current truth.  Recording the floor here is
-      ;; what stops the previous turn's error line staying in view and
-      ;; re-flagging a session that has since recovered.
-      ('input-submitted
-       (decknix-agent-net-error-clear (current-buffer))
-       (decknix-agent-net-error-mark-turn-start (current-buffer)))
-      (_ nil))))
+    (let ((event (plist-get args :event)))
+      (when (memq event '(turn-complete error input-submitted))
+        (decknix--agent-net-error-handle-event
+         (current-buffer) event (plist-get args :data))))))
 
 (defun decknix--agent-net-error-status-advice (orig-fn buffer &rest args)
   "Around-advice for `agent-shell-workspace--buffer-status': add `netfail'.

@@ -5371,8 +5371,10 @@ ${optionalString cfg.tableOverlay.enable ''
                           "decknix-agent-net-error" (&rest args))
         (declare-function decknix--agent-net-error-status-advice
                           "decknix-agent-net-error" (orig-fn buffer &rest args))
-        ;; Sensing seam: only the two events that BRACKET a turn, so unlike
-        ;; a chunk accumulator this costs nothing while output streams.
+        ;; Sensing seam: only the events that BRACKET a turn
+        ;; (`turn-complete', the failed prompt's `error', `input-submitted'),
+        ;; so unlike a chunk accumulator this costs nothing while output
+        ;; streams.
         (advice-add 'agent-shell--emit-event :before
                     #'decknix--agent-net-error-observe-event)
         ;; Display: added LAST on purpose.  `advice-add :around' wraps
