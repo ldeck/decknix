@@ -1287,6 +1287,12 @@ Notes:
   `turn-complete` and emits `error`, so the `error` event is observed too and
   its message (wrapper stripped) goes through the same test. A weekly limit
   arrives the same way with `errorKind: "rate_limit"` and stays unflagged.
+- **Pi** reports a provider failure as `**Pi error (provider/model):** detail`
+  then ends the turn normally (`pkgs/pi-acp/surface-provider-errors.patch`).
+  Bold markers are stripped before matching and `Pi error` is a report
+  prefix; the details seen locally were `fetch failed`, `terminated`,
+  `WebSocket error`, `upstream connect error ...`, an overloaded server, a
+  usage limit and `Request was aborted` (a cancel, not flagged).
 - `decknix-agent-net-error-change-functions` is called with `(BUFFER EVENT)`
   after every boundary; the auto-resume (below) listens on it.
 - **Zero hot-path cost**: only the events that bracket a turn are observed —

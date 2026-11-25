@@ -165,7 +165,7 @@ Gives the broker reattach time to render each session's last turns."
   (rx string-start (0+ (any " \t>|")) (0+ (any "⚠✗❌•-")) (0+ (any " \t"))
       (or "API Error" "API error" "Api Error" "Connection error"
           "Request failed" "Network error" "Fetch error" "stream error"
-          "Stream error"))
+          "Stream error" "Pi error"))
   "Prefix of a failure the AGENT'S OWN API call reported.
 Stricter than the net-error report shape, which also takes a bare
 \"Error:\": that is what a tool prints, and a tool that could not reach
@@ -198,7 +198,8 @@ Order is the precedence: a line naming a quota and an errno is a quota.")
           "Stream idle timeout" "Premature close" "terminated"
           "NameResolutionError" "Name or service not known"
           "nodename nor servname" "Temporary failure in name resolution"
-          "error sending request" "stream disconnected"))
+          "error sending request" "stream disconnected"
+          "WebSocket error" "WebSocket closed" "upstream connect error"))
   "Reachability faults: the request never got an answer.")
 
 (defconst decknix-agent-net-resume--overloaded-regexp

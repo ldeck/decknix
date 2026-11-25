@@ -45,6 +45,13 @@
     ("API Error: Claude AI usage limit reached, resets 5pm" . quota)
     ("API Error: Your credit balance is too low (ECONNRESET)" . quota)
     ("API Error: connect ECONNREFUSED 127.0.0.1:5432" . local)
+    ;; Pi, after net-error strips the emphasis (real errorMessage values).
+    ("Pi error (openai-codex/gpt-5.1): fetch failed" . network)
+    ("Pi error (anthropic/claude): terminated" . network)
+    ("Pi error: WebSocket error" . network)
+    ("Pi error (openai-codex/gpt-5.1): upstream connect error or disconnect/reset before headers. reset reason: connection termination" . network)
+    ("Pi error (openai-codex/gpt-5.1): Codex error: Our servers are currently overloaded. Please try again later." . overloaded)
+    ("Pi error (openai-codex/gpt-5.1): Codex error: The usage limit has been reached" . quota)
     ;; Not the agent's own API call at all.
     ("Error: getaddrinfo ENOTFOUND github.com" . nil)
     ("You've hit your weekly limit · resets 12pm (Australia/Sydney)" . nil)

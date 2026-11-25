@@ -130,6 +130,9 @@ Set to 0 to dispatch everything immediately."
 (defconst decknix-agent-net-error-report-regexp
   (rx line-start (0+ (any " \t>|")) (0+ (any "⚠✗❌•-")) (0+ (any " \t"))
       (or "API Error" "API error" "Api Error"
+          ;; Pi's provider error, `**Pi error (provider/model):** detail'
+          ;; once the emphasis is stripped (pkgs/pi-acp).
+          (seq "Pi error" (opt (0+ " ") "(" (0+ (not (any ")\n"))) ")"))
           "Request failed" "Request error"
           "Connection error" "Connection failed"
           "Fetch error" "Network error"
@@ -154,6 +157,7 @@ file -- from being flagged and bulk-prompted; see the Commentary.")
        "Unable to connect" "unable to connect"
        "Can't reach the API server"
        "Connection closed mid-response" "Stream idle timeout"
+       "WebSocket error" "upstream connect error" "overloaded"
        "Premature close" "terminated"
        ;; Transient HTTP: overloaded / rate-limited / gateway / timeout.
        ;; 4xx that are NOT transient (401, 403, 400) are excluded on
@@ -179,9 +183,13 @@ excerpt pasted for review -- not an incident this session suffered."
   (replace-regexp-in-string "```[^\0]*?```" "" (or text "")))
 
 (defun decknix--agent-net-error-tail-lines (text n)
-  "Return the last N non-blank lines of TEXT, in order."
+  "Return the last N non-blank lines of TEXT, in order.
+Markdown bold markers are dropped, so Pi's `**Pi error:** ...' reads as
+the report it is."
   (let ((lines (seq-remove #'string-empty-p
-                           (mapcar #'string-trim (split-string (or text "") "\n")))))
+                           (mapcar (lambda (line)
+                                     (string-trim (string-replace "**" "" line)))
+                                   (split-string (or text "") "\n")))))
     (if (<= (length lines) n)
         lines
       (nthcdr (- (length lines) n) lines))))

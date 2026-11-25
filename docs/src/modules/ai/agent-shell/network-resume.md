@@ -91,7 +91,7 @@ Agent processes survive an Emacs restart in the broker. The attempt count, the b
 | Agent  | Failure shape                                                                                                  |
 |--------|----------------------------------------------------------------------------------------------------------------|
 | Claude | `API Error: ...` streamed as agent text, then either a normal turn end or a JSON-RPC `-32603` error (`Internal error: API Error: ...`, `data.errorKind: "server_error"`). Both are handled. |
-| Pi     | `**Pi error (provider/model):** detail` streamed as agent text, then a normal turn end. Not flagged as `netfail` yet, so not resumed. |
+| Pi     | `**Pi error (provider/model):** detail` streamed as agent text, then a normal turn end. Handled: `fetch failed`, `terminated`, `WebSocket error` and `upstream connect error` are `network`, an overloaded server is `overloaded`, a usage limit is `quota`, and `Request was aborted` (a cancel) is ignored. |
 | Codex, Auggie, Antigravity | Through the same JSON-RPC error or agent-text paths. Not exercised against a real outage; extend `decknix-agent-net-error-transient-regexp` if their wording is missed. |
 
 ## Settings

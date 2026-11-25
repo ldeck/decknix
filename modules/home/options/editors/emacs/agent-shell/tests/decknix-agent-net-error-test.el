@@ -419,5 +419,27 @@ session that died this way was never flagged until a manual rescan."
           (should (decknix--agent-net-error-handle-event buf 'turn-complete nil)))
       (kill-buffer buf))))
 
+;; ---------------------------------------------------------------------
+;; Pi: `**Pi error (provider/model):** detail' (pkgs/pi-acp patch)
+;; ---------------------------------------------------------------------
+
+(ert-deftest decknix-net-error--pi-transport-failures ()
+  "Pi's provider errors for a dropped link are flagged, emphasis stripped."
+  (should (equal (decknix--agent-net-error-p
+                  "Working on it.\n\n**Pi error (openai-codex/gpt-5.1):** fetch failed\n")
+                 "Pi error (openai-codex/gpt-5.1): fetch failed"))
+  (should (decknix--agent-net-error-p "**Pi error (anthropic/claude):** terminated"))
+  (should (decknix--agent-net-error-p "**Pi error:** WebSocket error"))
+  (should (decknix--agent-net-error-p
+           "**Pi error (openai-codex/gpt-5.1):** upstream connect error or disconnect/reset before headers. reset reason: connection termination"))
+  (should (decknix--agent-net-error-p
+           "**Pi error (openai-codex/gpt-5.1):** Codex error: Our servers are currently overloaded. Please try again later.")))
+
+(ert-deftest decknix-net-error--pi-cancel-and-limits-are-not-network ()
+  "A cancel or a usage limit through Pi is not a dropped link."
+  (should-not (decknix--agent-net-error-p "**Pi error (x/y):** Request was aborted"))
+  (should-not (decknix--agent-net-error-p
+               "**Pi error (x/y):** Codex error: The usage limit has been reached")))
+
 (provide 'decknix-agent-net-error-test)
 ;;; decknix-agent-net-error-test.el ends here
