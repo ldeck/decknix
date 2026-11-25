@@ -180,7 +180,17 @@ it is the lower-value of the two and should land second.
    comment worth considering, and the old rule hid it.
 4. Fetch full thread detail (author, body, path, line, resolution) with
    pagination — the Part 2 data layer
+   ✅ landed: `decknix-review-threads` parses a page and
+   `decknix-pr-review-view-fetch-threads` follows `pageInfo` one page at a
+   time in a `gh api graphql` child process, so a PR past 100 threads is
+   read whole (open question 3).
 5. Thread list + jump + read (reading half of Part 2)
+   ✅ partly landed: `v` on the Review Board opens `*PR Review: repo#N*`
+   (open question 4: a buffer of its own, so the board's `RET` keeps its
+   meaning), read-only, with the description, CI, reviews, every thread
+   grouped by file with its whole conversation, and the agent's saved
+   plan. RET opens a thread on GitHub as the fallback; jumping to
+   `file:line` in the review worktree is still to do.
 6. Reply + resolve
 7. Staging buffer + single-call review submission (§2.2)
 

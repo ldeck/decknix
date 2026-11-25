@@ -2351,12 +2351,16 @@ let
   # conversation is worse than a refused one.  Pure parse/group/summary layers
   # carved + ERT-tested, including against a real GitHub response; the `gh api'
   # call and the rendering live outside per AGENTS.md Rule 2.
+  # `decknix-pr-review-view' is the reading surface over it (`v' on the
+  # Review Board): one buffer per PR, every `gh' call in a child process.
   decknix-review-threads-el = mkEmacsTestedPackage {
     pname = "decknix-review-threads";
     src = ./agent-shell/review-threads;
     packageRequires = [ ];
+    extraSiteFiles = [ "decknix-pr-review-view.el" ];
     testFiles = [
       "decknix-review-threads-test.el"
+      "decknix-pr-review-view-test.el"
     ];
   };
 
@@ -4501,6 +4505,9 @@ in
         ;; Review board: lanes, rows, ordering (read-only surface).
         (require 'decknix-review-board-model)
         (require 'decknix-review-board)
+        ;; `v' on a board row: the PR's description, CI, threads and the
+        ;; agent's saved plan, fetched by `gh' in child processes.
+        (require 'decknix-pr-review-view)
         ;; The URLs a session is handling: `C-c s O' / `U' / `<' / `>' in
         ;; every agent-shell buffer (bound with the rest of the local
         ;; `C-c s' map below), and `decknix-review-session-mode' switched on
