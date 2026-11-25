@@ -110,6 +110,13 @@
           inherit (inputs) self;
         };
 
+        # Secrets left in the flake dir are warned about, by path only
+        # (tests/secret-warnings.nix).
+        checks.secret-warnings = import ./tests/secret-warnings.nix {
+          inherit pkgs;
+          inherit (inputs) self;
+        };
+
         # The iap-proxy package never builds a proxy that binds all
         # interfaces (tests/iap-proxy.nix).
         checks.iap-proxy-bind = import ./tests/iap-proxy.nix { inherit pkgs; };

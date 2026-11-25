@@ -23,6 +23,9 @@ let
       base_url = cfg.jira.baseUrl;
       email = cfg.jira.email;
       api_token_file = cfg.jira.apiTokenFile;
+      api_token_secret = cfg.jira.apiTokenSecret;
+      secrets_org = cfg.jira.secretsOrg;
+      secrets_cli = "${pkgs.decknix-cli}/bin/decknix";
       project = cfg.jira.project;
       projects = cfg.jira.projects;
       pick_up = cfg.jira.pickUp;
@@ -191,7 +194,29 @@ in
         type = types.str;
         default = "${homeDir}/.config/decknix/local/jira-token";
         defaultText = literalExpression ''"''${homeDir}/.config/decknix/local/jira-token"'';
-        description = "Path to file containing Jira API token (one line, trimmed).";
+        description = ''
+          Deprecated fallback: a file holding the Jira API token (one line,
+          trimmed), read only when `apiTokenSecret` is not in `decknix secrets`.
+          Never point this inside ~/.config/decknix: that directory is copied
+          into the world-readable /nix/store on every switch.
+        '';
+      };
+
+      apiTokenSecret = mkOption {
+        type = types.str;
+        default = "jira-token";
+        description = ''
+          Name of the Jira API token in `decknix secrets` (the OS keychain),
+          looked up at poll time with `decknix secrets get <name> --org <secretsOrg>`.
+          Empty disables the lookup and uses `apiTokenFile` only.
+        '';
+      };
+
+      secretsOrg = mkOption {
+        type = types.str;
+        default = "local";
+        example = "my-org";
+        description = "Org whose `decknix secrets` store holds `apiTokenSecret`.";
       };
 
       project = mkOption {

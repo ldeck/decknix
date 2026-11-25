@@ -48,17 +48,24 @@ This is a Nix-managed macOS system. All tooling is installed via Nix.
 
 ## Secrets
 
-- Store secrets as **raw `0600` files under the org's secrets dir**:
-  `~/.config/decknix/<org>/secrets/<name>` (e.g.
-  `~/.config/decknix/examplecloud/secrets/jira-token`). The dir is `0700`.
+- Store secrets in the **OS keychain via `decknix secrets`**:
+  `decknix secrets set <name> --org <org>` (hidden prompt or stdin, never
+  argv), read at runtime with `decknix secrets get <name> --org <org>`, or
+  inject into one child with `decknix secrets exec --secret VAR=<name> -- cmd`.
+  Without a keychain it falls back to `0600` files under
+  `~/.local/share/decknix/<org>/secrets/`.
+- **Never** keep a secret anywhere inside `~/.config/decknix`, not even a
+  `0600` file: it is the system flake, copied whole into the world-readable
+  `/nix/store` on every switch. Every switch warns about leftovers;
+  `decknix secrets migrate --org <org>` moves them, and anything that was
+  there should be rotated.
 - **Never** route a secret through Nix `home.file.text` / a `secrets.nix`
-  string — that copies it into the world-readable `/nix/store`. A raw file
-  is both un-committed and out of the store. Reference it by *path* from
-  config (e.g. a wrapper that `cat`s the file at runtime); `~/.claude.json`
-  env values are literal strings and cannot read a file.
-- Secrets are never committed. `~/.config/decknix` is not a git repo; the
-  bootstrap scripts **prompt** for each secret and place it, so a machine
-  rebuild re-collects them.
+  string; that copies it into the store too. Reference it by *name* and
+  fetch it in a wrapper at runtime; `~/.claude.json` env values are literal
+  strings and cannot run a lookup.
+- Keychain items are local (not iCloud-synced) and secrets are never
+  committed, so the bootstrap scripts **prompt** for each secret and store it
+  with `decknix secrets set`; a machine rebuild re-collects them.
 
 ## Code Review
 

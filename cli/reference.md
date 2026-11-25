@@ -19,6 +19,7 @@ Commands:
   session             Find, create, and resume Claude sessions (workspace + tag aware)
   repos               Keep local clones fresh: fetch + fast-forward each repo's default branch
   hub                 Settings the decknix-hub daemon reads at runtime (no rebuild needed)
+  secrets             Store credentials in the OS keychain (never inside ~/.config/decknix)
   pull-local-changes  Pull local changes to agent skills/commands back into repositories
   help
 
@@ -1068,6 +1069,169 @@ Options:
 
       --pick-up
           Act on the projects offered to pick up (`pick_up_projects`) instead
+
+  -h, --help
+          Print help
+```
+
+## `decknix secrets`
+
+```text
+Store credentials in the OS keychain (never inside ~/.config/decknix)
+
+Usage: decknix secrets <COMMAND>
+
+Commands:
+  set      Store a secret, reading the value from stdin (or a hidden prompt on a terminal)
+  get      Print a secret to stdout (no trailing newline unless stdout is a terminal)
+  list     List the secrets known for an org and whether each is set (never values)
+  rm       Remove a secret from the backend
+  exec     Run a command with the named secrets in ITS environment only
+  backend  Show the backend and keychain service an org uses
+  migrate  Move raw secret files out of ~/.config/decknix into the backend
+
+Options:
+  -h, --help
+          Print help
+```
+
+## `decknix secrets set`
+
+```text
+Store a secret, reading the value from stdin (or a hidden prompt on a terminal)
+
+Usage: decknix secrets set [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+
+
+Options:
+      --org <ORG>
+          Org the secret belongs to (default $DECKNIX_SECRETS_ORG, else `local`)
+
+  -h, --help
+          Print help
+```
+
+## `decknix secrets get`
+
+```text
+Print a secret to stdout (no trailing newline unless stdout is a terminal)
+
+Usage: decknix secrets get [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+
+
+Options:
+      --org <ORG>
+
+
+      --no-legacy
+          Do not fall back to the deprecated file inside ~/.config/decknix
+
+  -h, --help
+          Print help
+```
+
+## `decknix secrets list`
+
+```text
+List the secrets known for an org and whether each is set (never values)
+
+Usage: decknix secrets list [OPTIONS]
+
+Options:
+      --org <ORG>
+
+
+  -h, --help
+          Print help
+```
+
+## `decknix secrets rm`
+
+```text
+Remove a secret from the backend
+
+Usage: decknix secrets rm [OPTIONS] <NAME>
+
+Arguments:
+  <NAME>
+
+
+Options:
+      --org <ORG>
+
+
+  -h, --help
+          Print help
+```
+
+## `decknix secrets exec`
+
+```text
+Run a command with the named secrets in ITS environment only
+
+Usage: decknix secrets exec [OPTIONS] --secret <[VAR=]NAME> -- <COMMAND>...
+
+Arguments:
+  <COMMAND>...
+          The command and its arguments, after `--`
+
+Options:
+      --org <ORG>
+
+
+      --secret <[VAR=]NAME>
+          Secret to inject, as NAME (variable NAME upper-snake-cased) or VAR=NAME; repeatable
+
+  -h, --help
+          Print help
+```
+
+## `decknix secrets backend`
+
+```text
+Show the backend and keychain service an org uses
+
+Usage: decknix secrets backend [OPTIONS]
+
+Options:
+      --org <ORG>
+
+
+  -h, --help
+          Print help
+```
+
+## `decknix secrets migrate`
+
+```text
+Move raw secret files out of ~/.config/decknix into the backend
+
+Usage: decknix secrets migrate [OPTIONS] --org <ORG>
+
+Options:
+      --org <ORG>
+          Org to migrate; reads ~/.config/decknix/<org>/secrets/ by default
+
+      --file <[NAME=]PATH>
+          Also migrate one file, as PATH (name = file name) or NAME=PATH; repeatable
+
+      --env-file <PATH>
+          Also migrate a KEY=value env file; each KEY becomes a kebab-case name
+
+      --keep
+          Keep the old files after a verified copy
+
+      --overwrite
+          Replace a value already in the backend that differs from the file
+
+      --dry-run
+          Report what would move without writing or deleting anything
 
   -h, --help
           Print help

@@ -254,7 +254,9 @@ expired, run kargo login --sso`; hover for every repo's error.
 | `decknix.services.hub.jira.enable` | `false` | Enable Jira adapter |
 | `decknix.services.hub.jira.baseUrl` | `""` | Jira base URL (e.g. `https://myorg.atlassian.net`) |
 | `decknix.services.hub.jira.email` | `""` | User email for API auth (typically wired from `config.<org>.user.email`) |
-| `decknix.services.hub.jira.apiTokenFile` | `~/.config/decknix/local/jira-token` | Path to Jira API token file |
+| `decknix.services.hub.jira.apiTokenSecret` | `"jira-token"` | Name of the token in `decknix secrets`, read at poll time |
+| `decknix.services.hub.jira.secretsOrg` | `"local"` | Org whose `decknix secrets` store holds it |
+| `decknix.services.hub.jira.apiTokenFile` | `~/.config/decknix/local/jira-token` | Deprecated fallback file, read only when the secret is missing |
 | `decknix.services.hub.jira.projects` | `[]` | Jira project keys for the Tasks section; overridden at runtime by `[hub.jira] projects` in `~/.config/decknix/settings.toml` (see below) |
 | `decknix.services.hub.jira.pickUp` | `true` | Also list unassigned To Do issues in open sprints |
 | `decknix.services.hub.jira.pickUpProjects` | `[]` | Projects to pick up from; empty means `projects`; overridden by `[hub.jira] pick_up_projects` |

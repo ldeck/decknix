@@ -14,14 +14,13 @@
 ├── local/                           # Personal overrides (always loaded)
 │   ├── home.nix                     # Packages, git identity, shell aliases
 │   ├── system.nix                   # macOS system preferences
-│   └── secrets.nix                  # Auth tokens, keys (gitignored)
+│   └── secrets.nix                  # Secret wiring by name only (no values)
 │
 ├── <org-name>/                      # Per-org personal overrides
 │   ├── identity.nix                 # Org identity, auto-wired to config.<org-name>.user.*
 │   ├── home.nix                     # Org-specific personal tweaks
 │   ├── system.nix
 │   ├── secrets.nix
-│   ├── secrets/                     # Raw 0600 secret files, referenced by path (not loaded)
 │   └── home/                        # Nested home modules (recursively loaded)
 │       └── extra.nix
 │
@@ -35,7 +34,8 @@ The same directory also holds runtime state written by the CLI, the hub and the 
 - **`local/`** is for generic personal config: git identity, extra packages, shell aliases
 - **`<org-name>/`** directories match flake input names; overrides specific to that org
 - **`identity.nix`** in an org directory generates `config.<org-name>.user.{email,name,githubUser,gpgKey}` in both the system and home-manager layers
-- **`secrets.nix`** files are gitignored and loaded into both the system and home-manager layers
+- **`secrets.nix`** files are gitignored and loaded into both the system and home-manager layers. They may name secrets but must not hold values
+- **No raw secrets anywhere in this tree**: the directory is copied into the world-readable `/nix/store` on every switch, so a `0600` file here is not private. Use [`decknix secrets`](../configuration/secrets.md); an `<org>/secrets/` directory left here triggers a warning
 - **`home/`, `system/` and `secrets/*.nix` subdirectories** are recursively scanned for additional `.nix` files
 - All directories are auto-discovered; no registration needed
 

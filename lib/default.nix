@@ -62,6 +62,7 @@
         # Framework
         decknix.darwinModules.default
         adoptionModule
+        { warnings = loader.secretWarnings; }
       ]
       # Org/user darwin modules
       ++ darwinModules
@@ -113,9 +114,13 @@
   #   identity.nix                        — org user identity (auto-wired to config.<org>.user.*)
   #   home.nix, system.nix, secrets.nix   — direct files (secrets loaded into both layers)
   #   home/<anything>.nix                 — recursive subdirectory loading
-  #   secrets/<name>                      — raw 0600 secret files (NOT .nix; ignored by
-  #                                         the loader, referenced by path from config —
-  #                                         keeps secrets out of the world-readable /nix/store)
+  #
+  # Do NOT keep raw secrets anywhere in this directory, not even 0600 files:
+  # `decknix switch` passes it to Nix as a `path:` flake, so every evaluation
+  # copies all of it into the world-readable /nix/store. Use `decknix secrets`
+  # (OS keychain) and read the value at runtime. `secretWarnings` below flags
+  # leftovers (an `<org>/secrets/` dir, secret-named files, literals in a
+  # secrets.nix) as evaluation warnings; paths only, never contents.
   #
   # NOTE: the authoritative config root is `~/.config/decknix/`. `~/.local/decknix/`
   # is a SEPARATE, older git repo that the live loader does NOT read — do not edit
@@ -133,7 +138,7 @@
   #   ├── local/
   #   │   ├── home.nix           — personal packages, git identity
   #   │   ├── system.nix         — machine-specific tweaks
-  #   │   └── secrets.nix        — personal secret wiring (paths only: Nix strings land in /nix/store)
+  #   │   └── secrets.nix        — personal secret wiring (no values: Nix strings land in /nix/store)
   #   ├── my-org/
   #   │   ├── identity.nix       — { email = "you@example.com"; name = "..."; }
   #   │   ├── home.nix           — org-specific home overrides
@@ -225,6 +230,44 @@
           else []
       ) allDirs;
 
+    # --- Secrets audit ---
+    # Mirrors `decknix secrets` flake_dir_findings in cli/src/secrets.rs.
+    # Lowercases before matching because ERE has no case-insensitive flag.
+    nonSecretSuffixes = [ ".nix" ".el" ".eld" ".json" ".log" ".lock" ".md" ".toml" ];
+    looksLikeSecretFile = name:
+      let n = lib.toLower name; in
+      !(lib.any (s: lib.hasSuffix s n) nonSecretSuffixes)
+      && (lib.any (k: lib.hasInfix k n) [ "token" "secret" "api-key" "apikey" "password" "credential" ]
+          || lib.hasSuffix ".env" n || lib.hasInfix ".env." n);
+    hasSecretLiteral = line:
+      let l = lib.toLower line; in
+      builtins.match "[[:space:]]*#.*" l == null
+      && (builtins.match ".*(ghp_|gho_|github_pat_|xox[abcdpr]-|sk-ant-|aiza|atatt|glpat-)[a-z0-9_-]{8,}.*" l != null
+          || builtins.match ".*(token|passw(or)?d|secret|api_?key)[a-z0-9_]*\"? *= *\"[^\"$/]{16,}\".*" l != null);
+    auditDir = dir:
+      let
+        entries = if lib.pathIsDirectory dir then builtins.readDir dir else {};
+        files = lib.attrNames (lib.filterAttrs (_: t: t == "regular") entries);
+        secretsDir = "${dir}/secrets";
+        rawSecrets = lib.optional
+          (lib.pathIsDirectory secretsDir && builtins.readDir secretsDir != {})
+          "${secretsDir}/ holds raw secret files";
+        secretsNix = "${dir}/secrets.nix";
+        literalLines = lib.optionals (lib.pathIsRegularFile secretsNix)
+          (lib.filter (x: x != null) (lib.imap1 (i: l: if hasSecretLiteral l then toString i else null)
+            (lib.splitString "\n" (builtins.readFile secretsNix))));
+        literals = lib.optional (literalLines != [])
+          "${secretsNix} has what look like secret literals (lines ${lib.concatStringsSep ", " literalLines})";
+        named = lib.optionals (dir != configDir)
+          (map (f: "${dir}/${f} looks like a raw secret file") (lib.filter looksLikeSecretFile files));
+      in rawSecrets ++ literals ++ named;
+    secretFindings = lib.concatMap auditDir
+      ([ configDir ] ++ map (d: "${configDir}/${d}")
+        (lib.filter (d: d != "result" && !lib.hasPrefix "." d) allDirs));
+    secretWarnings = map (f:
+      "decknix: ${f}. ${configDir} is copied into the world-readable /nix/store on every switch; "
+      + "move it with `decknix secrets migrate --org <org>` and rotate it.") secretFindings;
+
     # --- Load Logic ---
     # For a given type (home, system, secrets), gather files from:
     #   1. Root-level: ~/.config/decknix/<type>.nix
@@ -267,7 +310,7 @@
       # so config.<org>.user.* is available in both contexts.
       identity = identityModules;
     };
-    inherit allDirs configDir;
+    inherit allDirs configDir secretWarnings;
   };
 }
 

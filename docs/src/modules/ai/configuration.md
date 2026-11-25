@@ -264,7 +264,7 @@ manages — each executable agent-sync file becomes a narrow
     # DENY rules always win over allow — the backstop for a broad allow-list.
     permissions.deny = [
       "Bash(sudo:*)"
-      "Read(~/.config/decknix/**/secrets/**)"
+      "Read(~/.local/share/decknix/**/secrets/**)"
     ];
   };
 }
@@ -294,7 +294,7 @@ re-prompts for the relocated tool every session. Two ways to avoid that:
     allowManagedTools = false;              # broad Bash below supersedes them
     allow = [ "Bash" "Read" "Edit" "Write" ];
     deny  = [
-      "Read(~/.config/decknix/**/secrets/**)"
+      "Read(~/.local/share/decknix/**/secrets/**)"
       "Bash(sudo:*)"
       "Bash(rm -rf /:*)"
       "Bash(rm -rf ~:*)"

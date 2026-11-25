@@ -160,7 +160,7 @@ Two stages so the shell part stays small and testable and the logic lives in Rus
 - **Re-runs** are idempotent: on an installed machine the same command shows the current state and offers to add or remove tiers and components ("update via the installer"). `decknix adopt <tier|component> [--remove]` is the non-interactive equivalent.
 - **Non-interactive flags**: `--yes`, `--tier N`, `--with <component>` and `--without <component>` (repeatable), `--org <flake-ref>`, `--dry-run`, `--no-verify`, `--user`, `--host`. `CI=true` or no tty means every prompt answers no unless `--yes`.
 - **Private overlays**: a private overlay can be selected by flake ref (`git+ssh://...`) once SSH or `gh` auth works. For a one-command start the overlay may ship its own thin `install.sh` fetched with `gh api repos/<org>/<repo>/contents/install.sh -H 'Accept: application/vnd.github.raw' | bash` that simply calls the decknix installer with `--org <ref>`.
-- **Secrets**: the installer prompts only for secrets the overlay manifest declares, writes each as a raw file `~/.config/decknix/<org>/secrets/<name>` with mode 0600 in a 0700 directory, and never passes a secret through Nix evaluation. `--yes` without the matching env var skips the secret and lists it in the summary.
+- **Secrets**: the installer prompts only for secrets the overlay manifest declares, stores each with `decknix secrets set <name> --org <org>` (OS keychain; 0600 files under `~/.local/share/decknix/<org>/secrets/` without one), never inside `~/.config/decknix` (copied into the store on every switch), and never passes a secret through Nix evaluation. `--yes` without the matching env var skips the secret and lists it in the summary.
 
 ### 6.3 Uninstall UX
 
@@ -176,7 +176,7 @@ Two stages so the shell part stays small and testable and the logic lives in Rus
   5. Run the nix-darwin uninstaller, which restores `*.before-nix-darwin`; then restore the installer's own backups (including the legacy `*.before-decknix.<ts>` files from `bootstrap.sh`).
   6. Remove home-manager generations and GC roots, including `~/.config/decknix/result`.
   7. Optionally the Determinate uninstaller. A reboot is required to clear `/etc/synthetic.conf` entries; the summary says so.
-- **Never touches**: secrets under `~/.config/decknix/<org>/secrets/` (unless `--purge-secrets` with typed confirmation), `~/.config/decknix/local/`, the user flake itself (kept for reinstall), agent data in `~/.claude`, `~/.pi` and similar beyond files in the agent-sync manifest, source repositories, Emacs state (unless `--purge-state`), Homebrew, App Store and vendor apps.
+- **Never touches**: secrets in `decknix secrets` (unless `--purge-secrets` with typed confirmation), `~/.config/decknix/local/`, the user flake itself (kept for reinstall), agent data in `~/.claude`, `~/.pi` and similar beyond files in the agent-sync manifest, source repositories, Emacs state (unless `--purge-state`), Homebrew, App Store and vendor apps.
 - **Verify**: `decknix doctor --leftovers` scans every path class in the inventory and reports anything remaining. Slice 12 runs it on a fresh VM after install then uninstall.
 
 ### 6.4 Org overlay contract

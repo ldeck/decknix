@@ -17,6 +17,7 @@ mod repo_sync;
 mod wt_finished;
 mod emacs_cycle;
 mod hub_settings;
+mod secrets;
 
 // 1. Static Core Commands
 #[derive(Parser)]
@@ -86,6 +87,11 @@ enum Commands {
     Hub {
         #[command(subcommand)]
         action: hub_settings::HubAction,
+    },
+    /// Store credentials in the OS keychain (never inside ~/.config/decknix)
+    Secrets {
+        #[command(subcommand)]
+        action: secrets::SecretsAction,
     },
     /// Pull local changes to agent skills/commands back into repositories
     PullLocalChanges {
@@ -1499,6 +1505,8 @@ fn run_switch(
         );
     }
 
+    secrets::warn_flake_dir(&config_dir);
+
     // Load persistent overrides from settings.toml (silently empty if absent).
     let settings_path = config_dir.join("settings.toml");
     let config_overrides = load_switch_overrides_from_settings(&settings_path)?;
@@ -2335,6 +2343,9 @@ fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Hub { action }) => {
             hub_settings::run(action)?;
+        }
+        Some(Commands::Secrets { action }) => {
+            secrets::run(action)?;
         }
         Some(Commands::External(args)) => {
             let cmd_name = &args[0];

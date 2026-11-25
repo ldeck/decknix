@@ -101,7 +101,7 @@ in {
       deny = mkOption {
         type = types.listOf types.str;
         default = [ ];
-        example = [ "Bash(sudo:*)" "Read(~/.config/decknix/**/secrets/**)" ];
+        example = [ "Bash(sudo:*)" "Read(~/.local/share/decknix/**/secrets/**)" ];
         description = ''
           Claude Code permission DENY rules to merge into
           `~/.claude/settings.json` (`permissions.deny`).  Deny always wins

@@ -1,6 +1,7 @@
 // Jira adapter — polls assigned tasks via REST API
 //
-// Auth: email + API token (Basic auth).
+// Auth: email + API token (Basic auth). The token comes from
+// `decknix secrets get` (OS keychain), else the legacy token file.
 // Writes jira-tasks.json to hub data directory.
 
 use chrono::{DateTime, Utc};
@@ -23,8 +24,15 @@ pub struct JiraConfig {
     pub base_url: String,
     /// User email for Basic auth
     pub email: String,
-    /// Path to file containing the API token (one line, trimmed)
+    /// Legacy path to a file holding the API token (one line, trimmed);
+    /// read only when the `decknix secrets` lookup finds nothing.
     pub api_token_file: String,
+    /// Name of the token in `decknix secrets` (empty: file only).
+    pub api_token_secret: String,
+    /// Org the secret belongs to (`decknix secrets --org`).
+    pub secrets_org: String,
+    /// The `decknix` binary used for the lookup.
+    pub secrets_cli: String,
     /// Legacy single project key; used only when `projects` is empty.
     pub project: String,
     /// Project keys whose issues the Tasks section lists.  Overridden at
@@ -53,6 +61,9 @@ impl Default for JiraConfig {
             base_url: String::new(),
             email: String::new(),
             api_token_file: String::new(),
+            api_token_secret: String::new(),
+            secrets_org: "local".into(),
+            secrets_cli: "decknix".into(),
             project: String::new(),
             projects: Vec::new(),
             settings_file: None,
@@ -284,14 +295,34 @@ struct JiraLinkedIssueFields {
 }
 
 // ---------------------------------------------------------------------------
-// Read API token from file
+// Read API token: decknix secrets first, legacy file second
 // ---------------------------------------------------------------------------
 
-fn read_api_token(path: &str) -> Result<String, String> {
-    // Expand ~ to home dir
-    let expanded = if path.starts_with("~/") {
+/// The token from `CLI secrets get NAME --org ORG`, if it has one. Its
+/// stderr (a deprecation warning when it fell back to the flake dir) goes to
+/// the hub log; the value itself never does.
+fn read_secret(cli: &str, name: &str, org: &str) -> Option<String> {
+    let out = std::process::Command::new(cli)
+        .args(["secrets", "get", name, "--org", org])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| eprintln!("hub: run {cli} secrets get {name}: {e}"))
+        .ok()?;
+    let note = String::from_utf8_lossy(&out.stderr);
+    if !note.trim().is_empty() {
+        eprintln!("hub: {}", note.trim());
+    }
+    if !out.status.success() {
+        return None;
+    }
+    let v = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (!v.is_empty()).then_some(v)
+}
+
+fn read_api_token_file(path: &str) -> Result<String, String> {
+    let expanded = if let Some(rest) = path.strip_prefix("~/") {
         dirs::home_dir()
-            .map(|h| h.join(&path[2..]))
+            .map(|h| h.join(rest))
             .unwrap_or_else(|| PathBuf::from(path))
     } else {
         PathBuf::from(path)
@@ -299,6 +330,28 @@ fn read_api_token(path: &str) -> Result<String, String> {
     std::fs::read_to_string(&expanded)
         .map(|s| s.trim().to_string())
         .map_err(|e| format!("read token file {}: {e}", expanded.display()))
+}
+
+fn read_api_token(config: &JiraConfig) -> Result<String, String> {
+    if !config.api_token_secret.is_empty() {
+        if let Some(t) = read_secret(&config.secrets_cli, &config.api_token_secret, &config.secrets_org) {
+            return Ok(t);
+        }
+    }
+    if config.api_token_file.is_empty() {
+        return Err(format!(
+            "no Jira token: run `decknix secrets set {} --org {}`",
+            config.api_token_secret, config.secrets_org
+        ));
+    }
+    let t = read_api_token_file(&config.api_token_file)?;
+    if !config.api_token_secret.is_empty() {
+        eprintln!(
+            "hub: warning: Jira token read from deprecated file {}; run `decknix secrets set {} --org {}`",
+            config.api_token_file, config.api_token_secret, config.secrets_org
+        );
+    }
+    Ok(t)
 }
 
 // ---------------------------------------------------------------------------
@@ -455,7 +508,7 @@ fn issuelink_to_link(link: JiraIssueLink, base: &str) -> Option<JiraLink> {
 
 /// Fetch assigned Jira tasks, and unassigned ones to pick up.
 pub async fn poll_jira_tasks(config: &JiraConfig) -> Result<JiraTasksFile, String> {
-    let token = read_api_token(&config.api_token_file)?;
+    let token = read_api_token(config)?;
     let client = crate::http_client();
     let settings_path = config.settings_file.clone().map(PathBuf::from).unwrap_or_else(|| {
         dirs::home_dir().unwrap_or_default().join(".config/decknix/settings.toml")
@@ -805,5 +858,51 @@ mod tests {
     fn the_count_response_parses() {
         let r: JiraCountResponse = serde_json::from_str(r#"{"count": 137}"#).unwrap();
         assert_eq!(r.count, 137);
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("hub-jira-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A `decknix` stand-in: prints a token for `secrets get jira-token --org acme`.
+    fn stub_cli(dir: &std::path::Path) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join("decknix");
+        std::fs::write(&p, "#!/bin/sh\n[ \"$*\" = \"secrets get jira-token --org acme\" ] || exit 1\nprintf 'from-keychain'\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p.display().to_string()
+    }
+
+    #[test]
+    fn token_prefers_decknix_secrets_over_file() {
+        let d = scratch("prefer");
+        std::fs::write(d.join("tok"), "from-file\n").unwrap();
+        let cfg = JiraConfig {
+            api_token_secret: "jira-token".into(),
+            secrets_org: "acme".into(),
+            secrets_cli: stub_cli(&d),
+            api_token_file: d.join("tok").display().to_string(),
+            ..Default::default()
+        };
+        assert_eq!(read_api_token(&cfg).unwrap(), "from-keychain");
+    }
+
+    #[test]
+    fn token_falls_back_to_file_when_secret_missing() {
+        let d = scratch("fallback");
+        std::fs::write(d.join("tok"), "from-file\n").unwrap();
+        let cfg = JiraConfig {
+            api_token_secret: "jira-token".into(),
+            secrets_org: "other".into(),
+            secrets_cli: stub_cli(&d),
+            api_token_file: d.join("tok").display().to_string(),
+            ..Default::default()
+        };
+        assert_eq!(read_api_token(&cfg).unwrap(), "from-file");
+        let none = JiraConfig { api_token_file: String::new(), ..cfg };
+        assert!(read_api_token(&none).unwrap_err().contains("decknix secrets set jira-token"));
     }
 }
