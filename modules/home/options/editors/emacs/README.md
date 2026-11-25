@@ -199,10 +199,11 @@ Key bindings (in magit-status after `C-x g`):
 - `@ l i` → List issues
 - `RET` on PR → View PR details
 
-**Setup Required:** Forge needs a GitHub token. See [Secrets Guide](../../../../docs/src/configuration/secrets.md).
+**Setup:** run `gh auth login` and set `git config --global github.user USER`; Forge then takes its GitHub token from `gh auth token` (keychain), so no `~/.authinfo` is needed. Never generate `~/.authinfo` through Nix: that puts the token in `/nix/store`. See [Secrets Guide](../../../../docs/src/configuration/secrets.md).
 
 Options:
 - `programs.emacs.decknix.magit.forge.enable` - Enable Forge (default: true)
+- `programs.emacs.decknix.magit.forge.ghToken.enable` - Fall back to `gh auth token` for GitHub tokens, memory-cached (default: true)
 - `programs.emacs.decknix.magit.codeReview.enable` - Enable code-review (default: true)
 
 ### Org-mode (`org.nix`)

@@ -133,7 +133,7 @@
   #   ├── local/
   #   │   ├── home.nix           — personal packages, git identity
   #   │   ├── system.nix         — machine-specific tweaks
-  #   │   └── secrets.nix        — personal secrets (e.g., .authinfo)
+  #   │   └── secrets.nix        — personal secret wiring (paths only: Nix strings land in /nix/store)
   #   ├── my-org/
   #   │   ├── identity.nix       — { email = "you@example.com"; name = "..."; }
   #   │   ├── home.nix           — org-specific home overrides

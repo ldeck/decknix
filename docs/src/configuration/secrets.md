@@ -11,50 +11,40 @@ The [config loader](../architecture/config-loader.md) discovers and loads `secre
 
 Both are merged into your home-manager configuration.
 
-## Quick Setup
+## Never put a secret in a Nix string
 
-```nix
-# ~/.config/decknix/local/secrets.nix
-{ ... }: {
-  home.file.".authinfo".text = ''
-    machine api.github.com login YOUR_USERNAME^forge password ghp_YOUR_TOKEN
-  '';
-}
-```
+Anything Nix evaluates into a file (`home.file.<name>.text`, `.source`, `programs.*.extraConfig`, an env value) is copied into `/nix/store`, which every user on the machine can read, and it stays there until garbage-collected. A gitignored `secrets.nix` keeps a secret out of git, not out of the store. Keep secrets as raw `0600` files outside Nix (for example under `~/.config/decknix/<org>/secrets/`, mode `0700`) and reference them by path, or let a tool that already stores the secret in the keychain hand it over at runtime.
 
-Make sure `secrets.nix` is gitignored:
-
-```bash
-echo "secrets.nix" >> ~/.config/decknix/.gitignore
-```
+Generating `~/.authinfo` or `~/.netrc` through `home.file` triggers an evaluation warning for exactly this reason.
 
 ## GitHub Token for Forge
 
-Forge (GitHub PRs in Emacs) needs a Personal Access Token.
+Forge (GitHub PRs in Emacs) authenticates through ghub. With `programs.emacs.decknix.magit.forge.ghToken.enable` (on by default), a GitHub lookup that auth-source cannot answer falls back to `gh auth token --hostname HOST --user USER`, so the token stays in the keychain and is cached only in Emacs's memory. No `~/.authinfo` is needed.
 
-### 1. Create a Token
+### 1. Log in with gh
 
-1. Go to [GitHub → Settings → Developer Settings → Personal Access Tokens](https://github.com/settings/tokens)
-2. Generate a classic token with scopes: `repo`, `read:org`, `read:user`
-3. Copy the token (starts with `ghp_`)
+```bash
+gh auth login            # once per GitHub account
+gh auth status           # lists the logged-in accounts
+```
 
-### 2. Add to secrets.nix
+The token's scopes must cover what Forge does: `repo`, `read:org` and `read:user` (the default `gh auth login` scopes include them).
 
-```nix
-{ ... }: {
-  home.file.".authinfo".text = ''
-    machine api.github.com login YOUR_USERNAME^forge password ghp_xxxxxxxxxxxx
-  '';
-}
+### 2. Tell ghub your username
+
+```bash
+git config --global github.user YOUR_USERNAME
 ```
 
 ### 3. Verify in Emacs
 
 ```
-M-x auth-source-search RET
-host: api.github.com
-user: YOUR_USERNAME^forge
+M-x forge-pull RET
 ```
+
+After `gh auth refresh` or switching tokens, run `M-x decknix-ghub-gh-token-clear-cache`.
+
+An explicit auth-source entry (for example in `~/.authinfo.gpg`) still takes precedence over gh. Non-GitHub forges such as GitLab still need one.
 
 ## GPG-Encrypted Alternative
 
@@ -90,18 +80,9 @@ security add-internet-password -a "USER^forge" -s "api.github.com" -w "ghp_xxx"
 
 ## Multi-Account GitHub Setup
 
-For multiple GitHub accounts (personal + work), add entries for each:
+For multiple GitHub accounts (personal + work), log in to each with `gh auth login`; the gh fallback asks for the account ghub names (`gh auth token --user USER`), so each repo gets its own account's token.
 
-```nix
-{ ... }: {
-  home.file.".authinfo".text = ''
-    machine api.github.com login personal-user^forge password ghp_personal_xxx
-    machine api.github.com login work-user^forge password ghp_work_yyy
-  '';
-}
-```
-
-When you first use Forge in a repo, it prompts for which username to use. The choice is stored in `.git/config`.
+When you first use Forge in a repo, it prompts for which username to use. The choice is stored in `.git/config` (`github.user`).
 
 Combine with Git conditional includes for automatic email switching:
 
@@ -156,7 +137,7 @@ No configuration needed — enabled by default via `decknix.nix.githubAuth.enabl
 ## Security Best Practices
 
 1. **Never commit secrets** — always gitignore `secrets.nix`
-2. **Use GPG encryption** — encrypt `.authinfo` as `.authinfo.gpg`
+2. **Keep secrets out of the store**: no `home.file` text or Nix strings; use the keychain (gh), `.authinfo.gpg`, or raw `0600` files
 3. **Use short-lived tokens** — set token expiration when possible
 4. **Limit token scopes** — only grant necessary permissions
 5. **Prefer SSH** — use SSH over HTTPS for git operations
