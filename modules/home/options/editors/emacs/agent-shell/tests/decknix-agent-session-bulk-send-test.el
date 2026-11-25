@@ -82,5 +82,41 @@ and BUSY-P is what the mock busy predicate returns for that buffer."
     (let ((plan (decknix--session-bulk-send-plan (list c a b) busy-fn)))
       (should (equal (list c a b) (plist-get plan :enqueue))))))
 
+;; ── busy predicate ───────────────────────────────────────────────────
+
+(ert-deftest decknix-session-bulk-send--busy-p-reads-the-buffer-local ()
+  "A buffer whose `shell-maker--busy' is set locally is busy; others are not."
+  (let ((busy (generate-new-buffer " *test-bulk-busy*"))
+        (idle (generate-new-buffer " *test-bulk-idle*"))
+        (plain (generate-new-buffer " *test-bulk-plain*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer busy (setq-local shell-maker--busy t))
+          (with-current-buffer idle (setq-local shell-maker--busy nil))
+          (should (decknix--session-bulk-send-busy-p busy))
+          (should-not (decknix--session-bulk-send-busy-p idle))
+          (should-not (decknix--session-bulk-send-busy-p plain)))
+      (mapc #'kill-buffer (list busy idle plain)))))
+
+(ert-deftest decknix-session-bulk-send--busy-p-dead-buffer ()
+  "A killed buffer is not busy, rather than an error."
+  (let ((buf (generate-new-buffer " *test-bulk-dead*")))
+    (with-current-buffer buf (setq-local shell-maker--busy t))
+    (kill-buffer buf)
+    (should-not (decknix--session-bulk-send-busy-p buf))))
+
+(ert-deftest decknix-session-bulk-send--busy-buffer-is-enqueued ()
+  "With the real predicate, a busy session is queued, never sent now."
+  (let ((busy (generate-new-buffer " *test-bulk-busy*"))
+        (idle (generate-new-buffer " *test-bulk-idle*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer busy (setq-local shell-maker--busy t))
+          (let ((plan (decknix--session-bulk-send-plan
+                       (list busy idle) #'decknix--session-bulk-send-busy-p)))
+            (should (equal (list busy) (plist-get plan :enqueue)))
+            (should (equal (list idle) (plist-get plan :send-now)))))
+      (mapc #'kill-buffer (list busy idle)))))
+
 (provide 'decknix-agent-session-bulk-send-test)
 ;;; decknix-agent-session-bulk-send-test.el ends here

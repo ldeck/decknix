@@ -37,6 +37,20 @@
 
 ;;; Code:
 
+(defvar shell-maker--busy)
+
+(defun decknix--session-bulk-send-busy-p (buf)
+  "Non-nil when BUF's agent is mid-turn.
+
+`shell-maker--busy' is a buffer-local VARIABLE.  Testing it with
+`fboundp' (as the dispatcher once did) is always false, so every busy
+session was offered an immediate submit, which refuses a busy target
+silently: the prompt was dropped and still counted as sent."
+  (and (buffer-live-p buf)
+       (local-variable-p 'shell-maker--busy buf)
+       (buffer-local-value 'shell-maker--busy buf)
+       t))
+
 (defun decknix--session-bulk-send-plan (bufs busy-fn)
   "Partition BUFS into send-now and enqueue lists based on BUSY-FN.
 BUFS is a list of live agent-shell buffers.  BUSY-FN is a

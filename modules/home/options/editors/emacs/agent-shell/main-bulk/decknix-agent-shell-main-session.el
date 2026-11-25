@@ -307,6 +307,8 @@ Claude session at the wrong (un-nested) path."
 ;; Carved bulk-send planner (agent-shell/session-bulk-send/).
 (declare-function decknix--session-bulk-send-plan
                   "decknix-agent-session-bulk-send" (bufs busy-fn))
+(declare-function decknix--session-bulk-send-busy-p
+                  "decknix-agent-session-bulk-send" (buf))
 ;; Compose primitives (main-bulk sibling; resolved via heredoc load-order).
 (declare-function decknix--compose-enqueue-prompt
                   "decknix-agent-shell-main-compose" (target input))
@@ -2135,11 +2137,7 @@ Idle buffers receive an immediate submit; busy buffers are queued via
 the compose-queue polling timer.  Reports the counts after dispatch."
   (when bufs
     (let* ((plan (decknix--session-bulk-send-plan
-                  bufs
-                  (lambda (buf)
-                    (with-current-buffer buf
-                      (and (fboundp 'shell-maker--busy)
-                           (shell-maker--busy))))))
+                  bufs #'decknix--session-bulk-send-busy-p))
            (send-now (plist-get plan :send-now))
            (to-queue (plist-get plan :enqueue))
            (sent 0)
