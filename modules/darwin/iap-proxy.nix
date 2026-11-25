@@ -107,7 +107,32 @@ let
       teamcityToken = mkOption {
         type = types.nullOr types.str;
         default = null;
-        description = "TeamCity personal access token (only relevant for a TeamCity target).";
+        description = ''
+          Deprecated literal TeamCity personal access token. Avoid setting this:
+          it is written into the launchd plist in the world-readable /nix/store.
+          Store the token with `decknix secrets set` and set `teamcityTokenSecret`
+          instead.
+        '';
+      };
+
+      teamcityTokenSecret = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        example = "teamcity-token";
+        description = ''
+          Name of the TeamCity personal access token in `decknix secrets`
+          (the OS keychain), read at service start with
+          `decknix secrets get <name> --org <secretsOrg>` so the value never
+          enters /nix/store. If the secret is not set yet, the proxy still
+          starts without `TEAMCITY_TOKEN`.
+        '';
+      };
+
+      secretsOrg = mkOption {
+        type = types.str;
+        default = "local";
+        example = "my-org";
+        description = "Org whose `decknix secrets` store holds `teamcityTokenSecret`.";
       };
     };
   };
@@ -185,7 +210,18 @@ in
         ];
 
         serviceConfig = {
-          ProgramArguments = [ "${iap-proxy-pkg}/bin/iap-proxy" ];
+          ProgramArguments = [
+            (if inst.teamcityTokenSecret == null then
+              "${iap-proxy-pkg}/bin/iap-proxy"
+            else
+              "${pkgs.writeShellScript "iap-proxy-${name}" ''
+                if tc_tok="$(${pkgs.decknix-cli}/bin/decknix secrets get ${escapeShellArg inst.teamcityTokenSecret} --org ${escapeShellArg inst.secretsOrg} 2>/dev/null)" && [ -n "$tc_tok" ]; then
+                  export TEAMCITY_TOKEN="$tc_tok"
+                fi
+                unset tc_tok
+                exec "${iap-proxy-pkg}/bin/iap-proxy"
+              ''}")
+          ];
           # Always-on instances start at login and are kept alive. On-demand
           # instances (autoStart = false) are installed but dormant until
           # started with `launchctl kickstart`, and are not auto-restarted.
