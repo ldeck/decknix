@@ -148,6 +148,7 @@ Current in-tree packages:
 | `agent-shell/progress/decknix-progress-ui.el` | `*decknix-progress*` buffer | Magit-style hierarchical view |
 | `agent-shell/progress/decknix-progress-sidebar.el` | Sidebar badge integration | Mtime-cached `index.json` reads |
 | `agent-shell/attention/decknix-attention.el` | One definition of "needs you" | `netfail`/`waiting`/`asking`, ranked, with when each session entered its state (fed from the session snapshot and the sidebar's idle fingerprint, never computed on redisplay); tab-aware `C-c A j` and sidebar `J`. Flags (`decknix-attention-set-flags`) let an outside source mark a settled session `updated` (last rank) without touching its state: the Review Board does this for a PR pushed to after the review |
+| `agent-shell/net-resume/decknix-agent-net-resume.el` | Resume sessions a dropped link stopped | Listens on net-error's turn boundaries; `notifyutil` network-change watch plus async `curl -I` probe on a backoff only while a session waits (no process or timer otherwise); re-prompts each idle, untouched, non-asking `netfail` session at most 3 times per streak, staggered with jitter; attempt counts persist per session id so a restart neither repeats nor resets; sidebar `Z`, `C-c s M-N` |
 | `agent-shell/tab-status/decknix-agent-tab-status.el` | Tint tab-bar tabs by agent status | Sets `tab-bar-tab-face-function`; single-agent tabs get a status background (working/waiting/ready/…); uncached tab-bar → repaints on the header's existing status poll, no extra timer; colours are an overridable defcustom |
 | `agent-shell/layout-persist/decknix-layout-persist.el` | Frames/tabs/windows across restarts | Saved on `kill-emacs-hook` (SIGTERM runs it), before the last frame closes and every 5 min to `~/.local/state/decknix/emacs-layout.el`; offered once on the first GUI client frame (idle timer, never in the server filter); agent windows resume via `decknix--sidebar-restore-previous-session` or a RET placeholder; `C-c D w` / `C-c D W`. Session refs carry the prompt queue and compose draft (restored, queue never auto-sent); compose buffers in windows come back retargeted to the resumed session. Restart handshake with `decknix switch --restart-emacs`, all through files: `decknix-layout-prepare-restart` (returns at once, saves from a timer, writes the CLI's ready file), the one-shot `restart-restore` marker that makes the next first frame restore with sessions unasked, and `restart-summary.json` written after the broker reattach sweep |
 | `agent-shell/continuity/decknix-agent-continuity.el` | A reattached session comes back as it was | Armed by the resume path for a live broker: holds live output in upstream's `:pending-restore`, then (after `init-finished`, queued and staggered, re-deferring on input) renders the last `decknix-agent-continuity-turns` turns through `agent-shell--render-pending-restore`: agent side from the broker log window, each prompt from the transcript tail found by the turn's closing text (counting fails: task notifications arrive as mid-turn user entries). Restores the asking flags from the last committed turn, re-shows a permission request the bridge still waits on, seeds the input ring, enables the review-session mode, and derives turn-end state once a turn in flight at the restart ends (its `turn-complete` goes to the old client) |
@@ -1304,6 +1305,50 @@ Notes:
 | `C-c s N` | `decknix-agent-net-error-retry-all` | reset every stranded session **and** re-prompt it (`C-u`: all live sessions) |
 | `C-c s C-n` | `decknix-agent-net-error-reset-all` | reset only — for when you would rather steer them yourself |
 | `C-c s M-n` | `decknix-agent-net-error-list` | report which sessions died, and on what |
+
+### Auto-resume after network loss (`agent-shell/net-resume/`)
+
+`decknix-agent-net-resume` re-prompts a `netfail` session once its API host
+answers again. User docs: `docs/src/modules/ai/agent-shell/network-resume.md`.
+
+- **Listener, not advice.** It sits on
+  `decknix-agent-net-error-change-functions` (turn-complete, error,
+  input-submitted), added by `decknix-agent-net-resume-start` in the heredoc.
+  No new advice on the status chain or the event stream.
+- **Classification is stricter than net-error's flag.** The line must be the
+  agent's own API failure (`API Error`, `Connection error`, ... prefix; a bare
+  `Error:` is what tools print). Classes, in precedence order: `quota`, `auth`,
+  `rate-limit`, `local` (never resumed), then `network` and `overloaded`
+  (resumed), then `server` (bare 500, never). Table in
+  `decknix-agent-net-resume-classify` and its test.
+- **Watcher is a pure state machine** (`decknix-agent-net-resume-watch-step`:
+  `idle`/`waiting`/`probing`, events `pending`/`change`/`timer`/`probe-ok`/
+  `probe-fail`, returns actions). The effect layer only interprets actions.
+  `idle` owns no process and no timer. `waiting` runs `notifyutil -w
+  com.apple.system.config.network_change` and a backoff timer; `probing` runs
+  `curl -I` (or `nc -z`) to each waiting session's host in a child process.
+  Overloaded sessions use a single due timer instead of a probe.
+- **Decision** (`decknix-agent-net-resume-decide`) is re-run at the moment of
+  the submit, not only at recovery: disabled, dead, suppressed, not
+  resumable, not `netfail` (status chain), asking (`decknix--agent-turn-question`),
+  busy (`shell-maker--busy`), unsent prompt or compose text, queued prompt,
+  cap reached, under the 30 s minimum interval, or not yet due. A skip for
+  typing/asking/busy is spent on that failure, never queued.
+- **Own submit vs user input.** `decknix-agent-net-resume--submitting` is set
+  around the submit (`decknix--compose-submit-after-wait`); upstream emits
+  `input-submitted` synchronously inside it, so that event is ours. Any other
+  `input-submitted` ends the streak (keeping `:last` for the interval guard).
+- **At most once across restarts.** Records persist per session id in
+  `~/.local/state/decknix/net-resume.eld` (`decknix-state-io`), written only
+  when changed and BEFORE the submit. A startup sweep (idle, re-deferred on
+  input) rescans broker-reattached sessions.
+- **Sidebar.** `decknix-agent-net-resume-badge` (memory only) is appended by
+  `decknix--layout-session-status`; toggle `Z` in the sidebar toggles; `C-c s
+  M-N` suppresses one session.
+
+Tests: `tests/decknix-agent-net-resume-test.el` (classification table,
+decision rules, backoff, schedule, watcher transitions, probe argv, badge, and
+stubbed integration: stagger, own-submit, cap, user input, skips, restart).
 
 ### Agent dispatch (`agent-shell/dispatch/`, `decknix-agent-dispatch` CLI)
 

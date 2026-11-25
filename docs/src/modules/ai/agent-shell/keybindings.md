@@ -39,6 +39,9 @@ them all in one action rather than one at a time:
 | `C-c s N` | Reset every stranded session **and** send each a `continue`. Run this once the link is back. `C-u` widens it to every live session, for a failure whose evidence has already scrolled away. |
 | `C-c s C-n` | Reset only — clears the flag and the stuck turn state without re-prompting, for when you would rather steer the sessions yourself. |
 | `C-c s M-n` | List which sessions died, and on what. |
+| `C-c s M-N` | Suppress (or allow again) [auto-resume](./network-resume.md) for one session. |
+
+Sessions are also [resumed automatically](./network-resume.md) once the API host answers again, unless you have typed into them, they are asking you something, or they moved on by themselves. Sidebar toggles `Z` turns that off.
 
 Both bulk commands **rescan before acting**, so a session that recovered on its
 own is never re-prompted, and idle sessions are prompted immediately while busy

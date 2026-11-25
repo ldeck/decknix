@@ -1171,6 +1171,24 @@ keys.  Press `C-g' to abort."
   (interactive)
   (call-interactively #'decknix-agent-session-history-cycle-count))
 
+(defvar decknix-agent-net-resume-enabled)
+(declare-function decknix-agent-net-resume-toggle "decknix-agent-net-resume" ())
+
+(transient-define-suffix decknix-sidebar-transient--net-resume ()
+  :key "Z"
+  :description
+  (lambda ()
+    (let ((on (bound-and-true-p decknix-agent-net-resume-enabled)))
+      (format "net resume    %s"
+              (propertize (if on "[on]" "[off]")
+                          'face (if on 'font-lock-constant-face
+                                  'font-lock-comment-face)))))
+  :transient t
+  (interactive)
+  (if (fboundp 'decknix-agent-net-resume-toggle)
+      (call-interactively #'decknix-agent-net-resume-toggle)
+    (message "Auto-resume after network loss is not loaded")))
+
 (transient-define-prefix decknix-sidebar-transient--worktrees ()
   "Worktree toggles (nested sub-menu)."
   [:description "Worktree Toggles"
@@ -1231,7 +1249,8 @@ pipeline) moved to Shared rather than disappearing with them."
     (decknix-sidebar-transient--dormant-limit)    ;; dormant (4)
     (decknix-sidebar-transient--repos-behind)     ;; repos behind (5)
     (decknix-sidebar-transient--wt-hide-stale)    ;; stale wt (6)
-    (decknix-sidebar-transient--resume-history)]  ;; resume hist (9)
+    (decknix-sidebar-transient--resume-history)   ;; resume hist (9)
+    (decknix-sidebar-transient--net-resume)]      ;; net resume (Z)
    ["Requests"
     ;; Order matches the sidebar footer: alphabetical text labels
     ;; (age, bots, ci, layout, mention, reviewed, sort) then emoji-led

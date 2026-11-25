@@ -47,6 +47,7 @@
     - [Context Awareness](./modules/ai/agent-shell/context.md)
     - [Coordination Boards](./modules/ai/agent-shell/boards.md)
     - [Keybindings](./modules/ai/agent-shell/keybindings.md)
+    - [Auto-Resume After Network Loss](./modules/ai/agent-shell/network-resume.md)
     - [How It Compares](./modules/ai/agent-shell/comparison.md)
     - [Sidebar Layouts](./modules/ai/agent-shell/layouts/index.md)
       - [Global](./modules/ai/agent-shell/layouts/global.md)

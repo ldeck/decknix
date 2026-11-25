@@ -667,14 +667,21 @@ for a free-text question, which no quick key answers."
                 'decknix-layout-ask session
                 'help-echo "i for the full question")))
 
+(declare-function decknix-agent-net-resume-badge "decknix-agent-net-resume" (buffer))
+
 (defun decknix--layout-session-status (session)
   "Return SESSION's compact right-hand status: `ask 1h', `work', `ready'.
-The age is added while it waits on the user, which is when it matters."
+The age is added while it waits on the user, which is when it matters.
+The auto-resume badge (`fail ↻…' waiting for the link, `work ↻' resumed
+after one) follows, from memory only."
   (let* ((state (nth 3 session))
          (buf (decknix--layout-session-buffer session))
          (age (and (decknix--layout-attention-p state) buf
-                   (decknix-attention-age-label (decknix-attention-since buf)))))
-    (string-trim (concat (decknix--layout-state-short state) " " (or age "")))))
+                   (decknix-attention-age-label (decknix-attention-since buf))))
+         (resume (and buf (fboundp 'decknix-agent-net-resume-badge)
+                      (decknix-agent-net-resume-badge buf))))
+    (string-trim (concat (decknix--layout-state-short state) " " (or age "")
+                         " " (or resume "")))))
 
 (defun decknix--layout-attention-row (session width raw-keys &optional indent repo)
   "Return the row for SESSION, blocked on the user, fitted to WIDTH.

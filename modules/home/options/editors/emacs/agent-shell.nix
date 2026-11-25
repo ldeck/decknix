@@ -475,6 +475,19 @@ let
     ];
   };
 
+  # Resume a session the network stopped, once the link is back: listens
+  # on net-error's turn boundaries, watches `notifyutil' plus an async
+  # probe only while a session waits, and re-prompts each idle, untouched
+  # one at most `max-attempts' times per failure streak.
+  decknix-agent-net-resume-el = mkEmacsTestedPackage {
+    pname = "decknix-agent-net-resume";
+    src = ./agent-shell/net-resume;
+    packageRequires = [ decknix-agent-net-error-el ];
+    testFiles = [
+      "decknix-agent-net-resume-test.el"
+    ];
+  };
+
   # Default-OFF diagnostic (issue #150): record the ACP event stream + the
   # agent-shell turn boundaries (TURN-START/TURN-END) so a Claude session's
   # real turn-return timing can be compared to when the buffer status flips.
@@ -3795,6 +3808,7 @@ in
           decknix-agent-turn-signals-el
           decknix-agent-heartbeat-watch-el
           decknix-agent-net-error-el
+          decknix-agent-net-resume-el
           decknix-agent-review-worktree-el
           decknix-review-clone-el
           decknix-agent-broker-reattach-el
@@ -5386,6 +5400,17 @@ ${optionalString cfg.tableOverlay.enable ''
           (advice-add 'agent-shell-workspace--buffer-status :around
                       #'decknix--agent-net-error-status-advice))
 
+        ;; Auto-resume after network loss: a `netfail' session is
+        ;; re-prompted once the API host answers again, unless the user has
+        ;; typed, it is asking, or it moved on by itself.  Nothing runs while
+        ;; no session waits; the startup sweep picks up sessions the broker
+        ;; reattached.  `decknix-agent-net-resume-enabled' (sidebar toggles
+        ;; `Z') turns it off.
+        (require 'decknix-agent-net-resume)
+        (declare-function decknix-agent-net-resume-start
+                          "decknix-agent-net-resume" ())
+        (decknix-agent-net-resume-start)
+
         ;; Quick-capture: `C-c A C' -> jot a feature/bug/investigation into a
         ;; GitHub issue/comment or taskwarrior, async, even while an agent is
         ;; busy.  Tool-agnostic; the key binding is added below with the rest
@@ -5923,6 +5948,9 @@ ${optionalString cfg.tableOverlay.enable ''
           (define-key decknix-session-prefix-map (kbd "N") 'decknix-agent-net-error-retry-all)
           (define-key decknix-session-prefix-map (kbd "C-n") 'decknix-agent-net-error-reset-all)
           (define-key decknix-session-prefix-map (kbd "M-n") 'decknix-agent-net-error-list))
+        ;; `M-N': stop (or allow again) auto-resume for one session.
+        (when (fboundp 'decknix-agent-net-resume-suppress)
+          (define-key decknix-session-prefix-map (kbd "M-N") 'decknix-agent-net-resume-suppress))
         ;; Requests ordering: priority (default) vs the historical
         ;; recency feed.  `o' for order.
         ;;
