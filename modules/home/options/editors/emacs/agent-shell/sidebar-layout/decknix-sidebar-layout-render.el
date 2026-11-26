@@ -1291,7 +1291,7 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
                        (decknix--layout-strip-parent-tags raw-name parent-tags)
                      raw-name))
          (badge (and parent-tags (decknix--layout-session-engine-badge session)))
-         (name (if badge (format "%s [%s]" stripped badge) stripped))
+         (name (if badge (format "%s %s" stripped badge) stripped))
          (claims (plist-get row :repos))
          (expand-claims (decknix--layout-should-expand-claims-p session claims))
          (compact-counts (and (not expand-claims)
@@ -1305,15 +1305,23 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
          (block-start (point)))
     ;; Coloured by state as well as worded: the glyph and colour carry it
     ;; even where a narrow window truncates the name.
-    (insert (propertize (decknix--layout-fit-row left name right width)
-                        'face (decknix--layout-state-face state)
-                        'decknix-layout-session session
-                        'decknix-layout-buffer (nth 0 session)
-                        ;; The property upstream's goto, kill and
-                        ;; rename read.  Without it RET on a WIP row
-                        ;; said "No live agent buffer at point".
-                        'agent-shell-workspace-buffer sbuf)
-            "\n")
+    (let ((row-str (propertize (decknix--layout-fit-row left name right width)
+                               'face (decknix--layout-state-face state)
+                               'decknix-layout-session session
+                               'decknix-layout-buffer (nth 0 session)
+                               ;; The property upstream's goto, kill and
+                               ;; rename read.  Without it RET on a WIP row
+                               ;; said "No live agent buffer at point".
+                               'agent-shell-workspace-buffer sbuf)))
+      (when (and parent-tags (string-match "lane-\\([0-9][0-9]\\)" row-str))
+        (put-text-property (match-beginning 1) (match-end 1)
+                           'face (decknix--layout-lane-pill-face (match-string 1 row-str))
+                           row-str))
+      (when (and badge (string-match (concat " \\(" (regexp-quote badge) "\\) ") row-str))
+        (put-text-property (match-beginning 1) (match-end 1)
+                           'face '(:background "#24283b" :foreground "#9aa5ce")
+                           row-str))
+      (insert row-str "\n"))
     (setq line-num (1+ line-num))
     (when (decknix--layout-attention-p state)
       (setq line-num (decknix--layout-render-ask line-num width session)))
@@ -1360,9 +1368,40 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
         (format "%02d" (string-to-number (match-string 1 (downcase cand))))
       (truncate-string-to-width name 4))))
 
+(defconst decknix-sidebar-lane-palette-dark
+  '(("#1f2d3d" . "#7dcfff")
+    ("#1d312c" . "#73daca")
+    ("#33291f" . "#e0af68")
+    ("#2b2338" . "#bb9af7")
+    ("#342229" . "#f7768e")
+    ("#1d2e38" . "#2ac3de")
+    ("#253022" . "#9ece6a")
+    ("#312432" . "#c0caf5"))
+  "Dark-background (BG . FG) pairs for lane badges 01..08.")
+
+(defconst decknix-sidebar-lane-palette-light
+  '(("#dceeff" . "#0f4c81")
+    ("#d8f3dc" . "#1b4332")
+    ("#ffedd5" . "#7c2d12")
+    ("#ede9fe" . "#4c1d95")
+    ("#ffe4e6" . "#881337")
+    ("#cffafe" . "#155e75")
+    ("#ecfccb" . "#365314")
+    ("#fae8ff" . "#701a75"))
+  "Light-background (BG . FG) pairs for lane badges 01..08.")
+
+(defun decknix--layout-lane-pill-face (code)
+  "Return a subtle background-coloured pill face for lane CODE (e.g. \"02\")."
+  (let* ((idx (max 0 (1- (string-to-number (or code "1")))))
+         (light (eq (frame-parameter nil 'background-mode) 'light))
+         (palette (if light decknix-sidebar-lane-palette-light decknix-sidebar-lane-palette-dark))
+         (pair (nth (mod idx (length palette)) palette)))
+    (list :background (car pair) :foreground (cdr pair) :weight 'semi-bold)))
+
 (defun decknix--layout-lane-badge (session)
-  "Return compact `[NN]' badge for lane SESSION."
-  (format "[%s]" (decknix--layout-lane-short-code session)))
+  "Return compact background-coloured `NN' badge for lane SESSION (no brackets)."
+  (let ((code (decknix--layout-lane-short-code session)))
+    (propertize code 'face (decknix--layout-lane-pill-face code))))
 
 (defun decknix--layout-prominent-lane-p (lane-row)
   "Return non-nil when LANE-ROW should render as its own prominent line."
@@ -1396,8 +1435,8 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
                                    (if counts (concat counts " · ") "")
                                    (decknix--layout-session-status sess))))
                  (cons (cons (format "lane-%s%s" code (if eng (format " [%s]" eng) "")) buf)
-                       (propertize (format "[%s]" code)
-                                   'face (decknix--layout-state-face (nth 3 sess))
+                       (propertize code
+                                   'face (decknix--layout-lane-pill-face code)
                                    'agent-shell-workspace-buffer buf
                                    'decknix-layout-session sess
                                    'decknix-layout-buffer (nth 0 sess)
@@ -1406,13 +1445,14 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
              sorted))
            (choices (delq nil (mapcar (lambda (p) (and (cdar p) (car p))) pills)))
            (chunks (seq-partition (mapcar #'cdr pills) 8))
+           (sep (propertize ", " 'face 'font-lock-comment-face))
            (first t))
       (dolist (chunk chunks)
         (let ((prefix (if first "   lanes: " "          "))
               (line-start (point)))
           (setq first nil)
           (insert (propertize prefix 'face 'font-lock-comment-face)
-                  (string-join chunk "")
+                  (string-join chunk sep)
                   "\n")
           (put-text-property line-start (1+ line-start) 'decknix-layout-lane-pills choices)
           (when group-id
@@ -1849,10 +1889,9 @@ window, since the glyphs are the part worth keeping when space runs out."
                     (ship (decknix-ship-label ship))
                     (t (decknix--hub-format-age (alist-get 'updated raw)))))
          (lbadge (plist-get pr :lane-badge))
-         (num (if lbadge
-                  (format "%s #%s" lbadge (plist-get pr :number))
-                (format "#%s" (plist-get pr :number))))
-         (lead (format "    %s %-3s %s " icons age num))
+         (lead (concat (format "    %s %-3s " icons age)
+                       (if lbadge (concat lbadge " ") "")
+                       (format "#%s " (plist-get pr :number))))
          (room (max 1 (- width (string-width lead))))
          (title (decknix--layout-item-title pr))
          (title (if (> (string-width title) room)
@@ -1967,9 +2006,9 @@ PROVENANCE marks whether this association is evidence or a guess."
       (let ((lbadge (plist-get wt :lane-badge))
             (lsess (or (plist-get wt :lane-session) session)))
         (insert (propertize
-                 (format "    %s %-3s %s%s" (decknix--layout-wt-glyph wt)
-                         (decknix--layout-wt-markers wt)
-                         (if lbadge (concat (propertize lbadge 'face 'font-lock-constant-face) " ") "")
+                 (concat (format "    %s %-3s " (decknix--layout-wt-glyph wt)
+                                 (decknix--layout-wt-markers wt))
+                         (if lbadge (concat lbadge " ") "")
                          (propertize (decknix--layout-wt-label wt #'decknix--layout-review-title)
                                      'face 'shadow))
                  'decknix-layout-worktree wt
