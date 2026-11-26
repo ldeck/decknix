@@ -5054,9 +5054,10 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-sidebar-layout-render)
         (require 'decknix-sidebar-tasks)
         (decknix--layout-load-state)
-        (setq decknix-sidebar-wip-detail-mode 'active
+        (setq decknix-sidebar-wip-detail-mode 'actionable
               decknix-sidebar-strip-coordinator-tags t
-              decknix-sidebar-show-engine-badge t)
+              decknix-sidebar-show-engine-badge t
+              decknix-sidebar-compact-team-lanes t)
         (unless (file-readable-p decknix--layout-state-file)
           (puthash "wip-collapsed:unattended" t decknix--layout-expanded)
           (puthash "wip-collapsed:tasks:pick-up" t decknix--layout-expanded))
@@ -7579,9 +7580,11 @@ duration -- the most important number on this branch."
                   ;; buffer NAME too; without the fallback `a k', `v' and
                   ;; RET all refused a WIP row.
                   (if (fboundp 'decknix-layout-buffer-at)
-                      (decknix-layout-buffer-at (line-beginning-position))
-                    (get-text-property (line-beginning-position)
-                                       'agent-shell-workspace-buffer)))))))
+                      (or (decknix-layout-buffer-at (point))
+                          (decknix-layout-buffer-at (line-beginning-position)))
+                    (or (get-text-property (point) 'agent-shell-workspace-buffer)
+                        (get-text-property (line-beginning-position)
+                                           'agent-shell-workspace-buffer))))))))
 
         ;; -- Fix sidebar kill: upstream uses comint-send-eof which calls
         ;; comint-send-input, searching for the prompt regexp.  If the prompt
@@ -7866,6 +7869,8 @@ duration -- the most important number on this branch."
           (kbd "z") #'decknix-layout-cycle-wip-detail)
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "e") #'decknix-layout-toggle-engine-badge)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "L") #'decknix-layout-toggle-compact-team-lanes)
       ''
       + optionalString cfg.hub.enable ''
 

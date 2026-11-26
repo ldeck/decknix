@@ -1273,7 +1273,16 @@ hides one silently; Reviews and WIP list only the board's sessions."
   (should (equal "v8" (decknix--layout-engine-badge-for-model "claude-sonnet-5-5")))
   (should (equal "v6" (decknix--layout-engine-badge-for-model "claude-haiku-5-5")))
   (should (equal "vtx" (decknix--layout-engine-badge-for-model "google-vertex/gemini-4-argon:high")))
-  (should (equal "cdx" (decknix--layout-engine-badge-for-model "openai-codex/gpt-6.2-sol"))))
+  (should (equal "cdx" (decknix--layout-engine-badge-for-model "openai-codex/gpt-6.2-sol")))
+  (should (equal "03" (decknix--layout-lane-short-code '("*Claude: lane-03/us*" nil ("lane-03" "us") "ready" "/c" nil))))
+  (with-temp-buffer
+    (let ((decknix-sidebar-show-engine-badge nil))
+      (decknix--layout-render-lane-pills
+       0
+       (list (cons '(:session ("*Claude: lane-01*" nil ("lane-01") "ready" "/c" nil) :repos nil) 'observed)
+             (cons '(:session ("*Claude: lane-02*" nil ("lane-02") "ready" "/c" nil) :repos nil) 'observed))
+       "team:coord")
+      (should (string-match-p "lanes: \\[01\\]\\[02\\]" (buffer-string))))))
 
 (ert-deftest decknix-layout-render--group-overlay-highlights-enclosing-block ()
   "The active session gets both a row overlay and an enclosing group overlay."

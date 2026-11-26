@@ -156,7 +156,9 @@
                                       (decknix-pr-review-view-canvas-html
                                        '((title . "T"))
                                        (plist-get decknix-pr-review-view--data :plan)
-                                       nil))))
+                                       nil)))
+              (should (eq #'decknix-pr-review-view-cancel
+                          (lookup-key decknix-pr-review-view-mode-map (kbd "C-c C-k")))))
           (kill-buffer buf))))))
 
 (provide 'decknix-pr-review-view-test)

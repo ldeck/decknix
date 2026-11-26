@@ -300,7 +300,7 @@ Tags verdict, body, and each inline comment with text properties so `v', `e',
 `a', `k' and `C-c C-c' can edit and submit the review directly from Emacs."
   (concat
    (decknix-pr-review-view--heading
-    "Agent's plan  (v cycle verdict · e edit · a add inline · k drop inline · C-c C-c submit · V canvas)")
+    "Agent's plan  (v cycle verdict · e edit · a add inline · k drop inline · C-c C-c submit · C-c C-k cancel · V canvas)")
    (if (null plan)
        (format "  (none saved%s)\n" (if path (format " at %s" path) ""))
      (let ((inline (alist-get 'inline_comments plan))
@@ -740,6 +740,18 @@ truncated."
           (xwidget-webkit-browse-url url)
         (browse-url url)))))
 
+(defun decknix-pr-review-view-cancel ()
+  "Cancel the staged review in this buffer and close the window."
+  (interactive)
+  (pcase-let ((`(,owner ,repo ,number ,_url) decknix-pr-review-view--pr)
+              (plan-file (plist-get decknix-pr-review-view--data :plan-path)))
+    (when (yes-or-no-p (format "Cancel review for %s/%s#%s and close view? " owner repo number))
+      (when (and plan-file (file-exists-p plan-file)
+                 (yes-or-no-p (format "Also discard staged %s? " plan-file)))
+        (ignore-errors (delete-file plan-file)))
+      (quit-window t)
+      (message "Cancelled review view for %s/%s#%s" owner repo number))))
+
 (defvar decknix-pr-review-view-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "RET") #'decknix-pr-review-view-open-thread)
@@ -753,6 +765,7 @@ truncated."
     (define-key map (kbd "d") #'decknix-pr-review-view-delete-inline-comment)
     (define-key map (kbd "V") #'decknix-pr-review-view-open-canvas)
     (define-key map (kbd "C-c C-c") #'decknix-pr-review-view-submit)
+    (define-key map (kbd "C-c C-k") #'decknix-pr-review-view-cancel)
     (define-key map (kbd "g") #'decknix-pr-review-view-refresh)
     (define-key map (kbd "q") #'quit-window)
     map)

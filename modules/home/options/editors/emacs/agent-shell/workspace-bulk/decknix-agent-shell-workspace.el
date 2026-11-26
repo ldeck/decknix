@@ -5784,12 +5784,19 @@ directly — see `decknix-sidebar-primary-action'."
                                           'decknix-repo-sync-problem))
          (repo-collapsed (get-text-property (line-beginning-position)
                                             'decknix-repo-sync-collapsed))
-         (expand-key (get-text-property (line-beginning-position)
-                                        'decknix-layout-expand-key))
+         (layout-repo (get-text-property (line-beginning-position)
+                                         'decknix-layout-repo))
+         (expand-key (or (get-text-property (line-beginning-position)
+                                            'decknix-layout-expand-key)
+                         layout-repo))
          (orphan-prune (get-text-property (line-beginning-position)
                                           'decknix-layout-orphan-prune))
          (subagent (get-text-property (line-beginning-position)
                                       'decknix-layout-subagent))
+         (point-buf (and (not (bolp))
+                         (get-text-property (point) 'agent-shell-workspace-buffer)))
+         (lane-pills (get-text-property (line-beginning-position)
+                                        'decknix-layout-lane-pills))
          ;; Session-first: a Reviews PR row with a live session goes to
          ;; it.  Only the layout's rows carry `decknix-layout-pr', so the
          ;; old Requests rows (type `review') keep their menu.
@@ -5813,6 +5820,14 @@ directly — see `decknix-sidebar-primary-action'."
                 ('linked-pr         #'decknix-sidebar-linked-pr-menu)
                 ('linked-repo       #'decknix-sidebar-linked-repo-menu))))
     (cond
+     ((buffer-live-p point-buf)
+      (decknix-sidebar-goto-buffer point-buf))
+     (lane-pills
+      (let* ((choice (completing-read "Jump to lane: "
+                                      (mapcar #'car lane-pills) nil t))
+             (buf (cdr (assoc choice lane-pills))))
+        (when (buffer-live-p buf)
+          (decknix-sidebar-goto-buffer buf))))
      ((eq (car session-action) 'goto)
       (decknix-sidebar-goto-buffer (cadr session-action)))
      ((eq (car session-action) 'choose)
