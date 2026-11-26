@@ -1527,6 +1527,30 @@ When ACTIONABLE-ONLY is non-nil, drop already-shipped PRs and clean worktrees."
                        :session (plist-get c :session)))))
            (nreverse by-repo)))))
 
+(defun decknix--layout-team-scale-summary (session lanes)
+  "Return right-hand summary for coordinator SESSION and its LANES.
+When `decknix-sidebar-compact-team-lanes' and `decknix-sidebar-show-engine-badge'
+are enabled, summarises scale and engine mix (e.g. \"6×v8 · ready\" or
+\"4×v8 2×vtx · ready\")."
+  (when lanes
+    (if (and decknix-sidebar-compact-team-lanes
+             decknix-sidebar-show-engine-badge)
+        (let ((counts nil))
+          (dolist (lane lanes)
+            (let* ((lsess (plist-get (car lane) :session))
+                   (eng (or (decknix--layout-session-engine-badge lsess) "v8"))
+                   (cell (assoc eng counts)))
+              (if cell
+                  (setcdr cell (1+ (cdr cell)))
+                (push (cons eng 1) counts))))
+          (format "%s · %s"
+                  (mapconcat (lambda (c) (format "%d×%s" (cdr c) (car c)))
+                             (nreverse counts) " ")
+                  (decknix--layout-session-status session)))
+      (format "%d lane%s %s" (length lanes)
+              (if (= 1 (length lanes)) "" "s")
+              (decknix--layout-session-status session)))))
+
 (defun decknix--layout-render-team (line-num width team raw-keys)
   "Render a coordinator TEAM: its row, then its lanes nested.  Returns LINE-NUM.
 
@@ -1542,9 +1566,7 @@ collapsed team still lists any lane blocked on the user."
          (team-start (point)))
     (setq line-num (decknix--layout-render-wip-session
                     line-num width row
-                    (and lanes (format "%d lane%s %s" (length lanes)
-                                       (if (= 1 (length lanes)) "" "s")
-                                       (decknix--layout-session-status session)))
+                    (decknix--layout-team-scale-summary session lanes)
                     nil key))
     (put-text-property team-start (point) 'decknix-layout-collapse-key
                        (concat "wip-collapsed:" key))
@@ -1560,8 +1582,7 @@ collapsed team still lists any lane blocked on the user."
       (setq line-num (1+ line-num)))
      ((and decknix-sidebar-compact-team-lanes
            (not (eq decknix-sidebar-wip-detail-mode 'all)))
-      (let ((prominent (seq-filter (lambda (l) (decknix--layout-prominent-lane-p (car l))) lanes))
-            (idle (seq-remove (lambda (l) (decknix--layout-prominent-lane-p (car l))) lanes)))
+      (let ((prominent (seq-filter (lambda (l) (decknix--layout-prominent-lane-p (car l))) lanes)))
         (dolist (lane prominent)
           (let ((lstart (point)))
             (setq line-num (decknix--layout-render-wip-session
@@ -1574,7 +1595,6 @@ collapsed team still lists any lane blocked on the user."
                                           (if (eq (cdr lane) 'inferred)
                                               (propertize " ~" 'decknix-layout-guess 'inferred)
                                             "  "))))
-        (setq line-num (decknix--layout-render-lane-pills line-num idle key))
         (when (eq decknix-sidebar-wip-detail-mode 'actionable)
           (dolist (tclaim (decknix--layout-merge-team-claims lanes t))
             (setq line-num (decknix--layout-render-claim-1

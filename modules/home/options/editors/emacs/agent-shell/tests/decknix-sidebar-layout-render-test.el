@@ -1283,7 +1283,14 @@ hides one silently; Reviews and WIP list only the board's sessions."
              (cons '(:session ("*Claude: lane-02*" nil ("lane-02") "ready" "/c" nil) :repos nil) 'observed))
        "team:coord")
       (should (string-match-p "lanes: 01, 02" (buffer-string)))
-      (should (plist-get (decknix--layout-lane-pill-face "02") :background)))))
+      (should (plist-get (decknix--layout-lane-pill-face "02") :background))))
+  (let ((decknix-sidebar-compact-team-lanes t)
+        (decknix-sidebar-show-engine-badge t))
+    (should (equal "2×v8 · ready"
+                   (decknix--layout-team-scale-summary
+                    '("*Claude: coord*" nil nil "ready" "/c" nil)
+                    (list (cons '(:session ("*Claude: lane-01*" nil ("lane-01") "ready" "/c" nil)) 'observed)
+                          (cons '(:session ("*Claude: lane-02*" nil ("lane-02") "ready" "/c" nil)) 'observed)))))))
 
 (ert-deftest decknix-layout-render--group-overlay-highlights-enclosing-block ()
   "The active session gets both a row overlay and an enclosing group overlay."
