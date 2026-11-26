@@ -162,6 +162,48 @@ screen.  The number held back is always reported.")
 (defconst decknix-sidebar-layout-dormant-cycle '(6 12 24 nil)
   "Cycle for `decknix-sidebar-layout-dormant-limit'; nil means all.")
 
+(defcustom decknix-sidebar-wip-detail-mode 'all
+  "How much PR/worktree detail to expand under WIP sessions.
+`active'     (Option A) expand claims only for the active session or one asking you.
+`actionable' (Option B) expand claims for the active session, asking sessions, or actionable PRs.
+`all'        expand every repo and PR under every WIP session."
+  :type '(choice (const active) (const actionable) (const all))
+  :group 'decknix)
+
+(defconst decknix-sidebar-wip-detail-cycle '(active actionable all)
+  "Cycle order for `decknix-sidebar-wip-detail-mode'.")
+
+(defun decknix-layout-cycle-wip-detail ()
+  "Cycle WIP detail expansion mode (`active' -> `actionable' -> `all')."
+  (interactive)
+  (let* ((cur decknix-sidebar-wip-detail-mode)
+         (pos (seq-position decknix-sidebar-wip-detail-cycle cur))
+         (next (nth (mod (1+ (or pos -1))
+                         (length decknix-sidebar-wip-detail-cycle))
+                    decknix-sidebar-wip-detail-cycle)))
+    (setq decknix-sidebar-wip-detail-mode next)
+    (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+      (agent-shell-workspace-sidebar-refresh))
+    (message "WIP detail mode: %s" next)))
+
+(defcustom decknix-sidebar-strip-coordinator-tags nil
+  "When non-nil, strip a coordinator's scope tags from its nested lane labels."
+  :type 'boolean
+  :group 'decknix)
+
+(defcustom decknix-sidebar-show-engine-badge nil
+  "When non-nil, show a compact engine tier badge (`v8', `v10', `v12', `vtx', `cdx') on lanes."
+  :type 'boolean
+  :group 'decknix)
+
+(defun decknix-layout-toggle-engine-badge ()
+  "Toggle showing engine badges on lane rows in the sidebar."
+  (interactive)
+  (setq decknix-sidebar-show-engine-badge (not decknix-sidebar-show-engine-badge))
+  (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+    (agent-shell-workspace-sidebar-refresh))
+  (message "Sidebar engine badges: %s" (if decknix-sidebar-show-engine-badge "on" "off")))
+
 (defun decknix-layout-cycle-dormant-limit ()
   "Cycle how many unattended items are listed."
   (interactive)
@@ -1146,14 +1188,100 @@ merged PR."
                          (plist-get lines :current)))
               (and (plist-get lines :next) (cons 'next (plist-get lines :next))))))))
 
-(defun decknix--layout-render-wip-session (line-num width row &optional right)
+(declare-function decknix--agent-session-current-model-id "decknix-agent-session-model" ())
+(declare-function decknix--agent-session-model-for-conv-key "decknix-agent-session-model" (conv-key))
+
+(defun decknix--layout-engine-badge-for-model (model)
+  "Return a short engine tier badge for MODEL string, or nil.  Pure."
+  (when (and (stringp model) (not (string-empty-p model)))
+    (let ((m (downcase model)))
+      (cond
+       ((string-match-p "opus" m) "v12")
+       ((string-match-p "fable" m) "v10")
+       ((string-match-p "sonnet" m) "v8")
+       ((string-match-p "haiku" m) "v6")
+       ((string-match-p "argon" m) "vtx")
+       ((string-match-p "neon" m) "vtx6")
+       ((string-match-p "flash" m) "v4")
+       ((string-match-p "codex\\|gpt-" m) "cdx")
+       ((string-match-p "llama\\|qwen\\|ollama" m) "loc")
+       (t nil)))))
+
+(defun decknix--layout-session-engine-badge (session)
+  "Return the compact engine badge for SESSION when enabled, or nil."
+  (when decknix-sidebar-show-engine-badge
+    (when-let* ((buf (decknix--layout-session-buffer session))
+                (model (with-current-buffer buf
+                         (or (and (fboundp 'decknix--agent-session-current-model-id)
+                                  (ignore-errors (decknix--agent-session-current-model-id)))
+                             (and (bound-and-true-p decknix--agent-conv-key)
+                                  (fboundp 'decknix--agent-session-model-for-conv-key)
+                                  (ignore-errors
+                                    (decknix--agent-session-model-for-conv-key
+                                     decknix--agent-conv-key)))))))
+      (decknix--layout-engine-badge-for-model model))))
+
+(defun decknix--layout-strip-parent-tags (name parent-tags)
+  "Return session short NAME with PARENT-TAGS stripped from its `/`-separated segments.  Pure."
+  (if (or (null parent-tags) (not (stringp name)) (string-empty-p name))
+      name
+    (let* ((lower-parents (mapcar #'downcase parent-tags))
+           (segs (split-string name "/" t))
+           (kept (seq-remove (lambda (s) (member (downcase s) lower-parents)) segs)))
+      (if kept (string-join kept "/") name))))
+
+(defun decknix--layout-claims-summary-label (claims)
+  "Return a compact `N pr M wt' summary across CLAIMS, or nil.  Pure."
+  (let ((prs 0) (wts 0))
+    (dolist (c claims)
+      (setq prs (+ prs (or (plist-get c :prs) 0))
+            wts (+ wts (or (plist-get c :worktrees) 0))))
+    (let ((label (string-trim (decknix--layout-count-label prs wts))))
+      (and (not (string-empty-p label)) label))))
+
+(defun decknix--layout-should-expand-claims-p (session claims)
+  "Return non-nil when SESSION's CLAIMS should expand inline under `decknix-sidebar-wip-detail-mode'."
+  (pcase decknix-sidebar-wip-detail-mode
+    ('all t)
+    ('active
+     (let ((buf (decknix--layout-session-buffer session)))
+       (or (and buf (eq buf (decknix--layout-active-target)))
+           (decknix--layout-attention-p (nth 3 session))
+           (decknix--layout-expanded-p (concat "sess:" (nth 0 session))))))
+    ('actionable
+     (let ((buf (decknix--layout-session-buffer session)))
+       (or (and buf (eq buf (decknix--layout-active-target)))
+           (decknix--layout-attention-p (nth 3 session))
+           (decknix--layout-expanded-p (concat "sess:" (nth 0 session)))
+           (seq-some (lambda (c)
+                       (> (decknix--layout-worst-severity
+                           (plist-get c :pr-items) (plist-get c :wt-items))
+                          1))
+                     claims))))
+    (_ t)))
+
+(defun decknix--layout-render-wip-session (line-num width row &optional right parent-tags group-id)
   "Render WIP session ROW with its question, agents and work.
 Returns LINE-NUM.  RIGHT replaces the state word on the right."
   (let* ((session (plist-get row :session))
          (state (nth 3 session))
-         (name (decknix--layout-short-name (nth 0 session)))
+         (raw-name (decknix--layout-short-name (nth 0 session)))
+         (stripped (if (and decknix-sidebar-strip-coordinator-tags parent-tags)
+                       (decknix--layout-strip-parent-tags raw-name parent-tags)
+                     raw-name))
+         (badge (and parent-tags (decknix--layout-session-engine-badge session)))
+         (name (if badge (format "%s [%s]" stripped badge) stripped))
+         (claims (plist-get row :repos))
+         (expand-claims (decknix--layout-should-expand-claims-p session claims))
+         (compact-counts (and (not expand-claims)
+                              (decknix--layout-claims-summary-label claims)))
+         (base-right (or right (decknix--layout-session-status session)))
+         (right (if compact-counts
+                    (format "%s · %s" compact-counts base-right)
+                  base-right))
          (left (format " %s  " (decknix--layout-state-glyph state)))
-         (right (or right (decknix--layout-session-status session))))
+         (sbuf (decknix--layout-session-buffer session))
+         (block-start (point)))
     ;; Coloured by state as well as worded: the glyph and colour carry it
     ;; even where a narrow window truncates the name.
     (insert (propertize (decknix--layout-fit-row left name right width)
@@ -1163,20 +1291,24 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
                         ;; The property upstream's goto, kill and
                         ;; rename read.  Without it RET on a WIP row
                         ;; said "No live agent buffer at point".
-                        'agent-shell-workspace-buffer
-                        (decknix--layout-session-buffer session))
+                        'agent-shell-workspace-buffer sbuf)
             "\n")
     (setq line-num (1+ line-num))
     (when (decknix--layout-attention-p state)
       (setq line-num (decknix--layout-render-ask line-num width session)))
-    (when decknix-sidebar-item-lines
+    (when (and decknix-sidebar-item-lines expand-claims)
       (setq line-num (decknix--layout-insert-item-lines
                       line-num width (decknix--layout-session-lines session) "      "
                       'decknix-layout-line-of session)))
     (setq line-num (decknix--layout-render-subagents line-num (nth 0 session) width))
-    (dolist (claim (plist-get row :repos))
-      (setq line-num (decknix--layout-render-claim
-                      line-num width claim session (plist-get row :provenance))))
+    (when expand-claims
+      (dolist (claim claims)
+        (setq line-num (decknix--layout-render-claim
+                        line-num width claim session (plist-get row :provenance)))))
+    (when sbuf
+      (put-text-property block-start (point) 'decknix-layout-session-block sbuf))
+    (when group-id
+      (put-text-property block-start (point) 'decknix-layout-group-id group-id))
     line-num))
 
 (defun decknix--layout-render-wip-blocked (line-num width rows raw-keys indent)
@@ -1204,15 +1336,18 @@ collapsed team still lists any lane blocked on the user."
   (let* ((row (plist-get team :row))
          (lanes (plist-get team :lanes))
          (session (plist-get row :session))
+         (coord-tags (append (nth 2 session)
+                             (split-string (decknix--layout-short-name (nth 0 session)) "/" t)))
          (key (concat "team:" (nth 0 session)))
          (collapsed (decknix--layout-collapsed-p key))
-         (start (point)))
+         (team-start (point)))
     (setq line-num (decknix--layout-render-wip-session
                     line-num width row
                     (and lanes (format "%d lane%s %s" (length lanes)
                                        (if (= 1 (length lanes)) "" "s")
-                                       (decknix--layout-session-status session)))))
-    (put-text-property start (point) 'decknix-layout-collapse-key
+                                       (decknix--layout-session-status session)))
+                    nil key))
+    (put-text-property team-start (point) 'decknix-layout-collapse-key
                        (concat "wip-collapsed:" key))
     (if collapsed
         (progn
@@ -1227,7 +1362,7 @@ collapsed team still lists any lane blocked on the user."
       (dolist (lane lanes)
         (let ((lstart (point)))
           (setq line-num (decknix--layout-render-wip-session
-                          line-num (- width 4) (car lane)))
+                          line-num (- width 4) (car lane) nil coord-tags key))
           ;; Nested by indenting the lane's whole block, so its PRs and
           ;; worktrees stay beneath it.  A `~' marks a lane placed by its
           ;; tags rather than by a message its coordinator sent; it sits
@@ -1239,6 +1374,7 @@ collapsed team still lists any lane blocked on the user."
                                         (if (eq (cdr lane) 'inferred)
                                             (propertize "   ~" 'decknix-layout-guess 'inferred)
                                           "    ")))))
+    (put-text-property team-start (point) 'decknix-layout-group-id key)
     line-num))
 
 (defun decknix--layout-render-wip-workspace (line-num width ws raw-keys multi)
@@ -1272,7 +1408,9 @@ MULTI non-nil means several workspaces, so this one gets a header."
                 (setq line-num (decknix--layout-render-wip-blocked
                                 line-num width rows raw-keys "   "))
               (dolist (row rows)
-                (setq line-num (decknix--layout-render-wip-session line-num width row))))))))
+                (setq line-num (decknix--layout-render-wip-session
+                                line-num width row nil nil
+                                (concat "indiv:" (nth 0 (plist-get row :session)))))))))))
     line-num))
 
 (defun decknix--layout-render-feed-errors (line-num width)
@@ -1864,15 +2002,20 @@ costs no network; an absent file renders nothing rather than a guess."
 
 ;; --- the session you are looking at ------------------------------------
 
+(defface decknix-sidebar-active-group
+  '((((background dark)) :background "#1e222a" :extend t)
+    (((background light)) :background "#eef1f6" :extend t))
+  "Codeblock-style subtle background for the sidebar grouping of the active session."
+  :group 'decknix)
+
 (defface decknix-sidebar-active-session
-  '((t :inherit hl-line :extend t))
-  "Face for the sidebar row of the session shown in the selected window.
-A background only, by inheriting `hl-line', so the row keeps the
-foreground that says its state."
+  '((((background dark)) :background "#28344a" :extend t)
+    (((background light)) :background "#d8e2f3" :extend t))
+  "Face for the sidebar row of the session shown in the selected window."
   :group 'decknix)
 
 (defcustom decknix-sidebar-highlight-active-session t
-  "When non-nil, highlight the sidebar row of the session you are viewing."
+  "When non-nil, highlight the sidebar row and group of the session you are viewing."
   :type 'boolean
   :group 'decknix)
 
@@ -1881,6 +2024,9 @@ foreground that says its state."
 
 (defvar decknix--layout-active-overlay nil
   "The overlay marking that buffer's sidebar row.")
+
+(defvar decknix--layout-active-group-overlay nil
+  "The overlay marking that buffer's enclosing sidebar group block.")
 
 (defvar decknix--layout-active-timer nil
   "Pending highlight update, so a burst of window changes runs it once.")
@@ -1911,31 +2057,59 @@ the scan reads text properties only."
         (forward-line 1))
       nil)))
 
+(defun decknix--layout-group-bounds (pos)
+  "Return (START . END) of the `decknix-layout-group-id' region containing POS, or nil."
+  (when-let* ((gid (and pos (get-text-property pos 'decknix-layout-group-id))))
+    (let ((beg (or (previous-single-property-change (1+ pos) 'decknix-layout-group-id nil (point-min))
+                   (point-min)))
+          (end (or (next-single-property-change pos 'decknix-layout-group-id nil (point-max))
+                   (point-max))))
+      (cons beg end))))
+
 (defun decknix-layout-highlight-active (&optional force)
-  "Mark the sidebar row of the session in the selected window.
+  "Mark the sidebar row and enclosing group of the session in the selected window.
 Cheap: one scan of the sidebar's text properties, skipped unless FORCE
 when neither the target nor the overlay has moved.  Nothing is rendered."
   (let ((sidebar (get-buffer agent-shell-workspace-sidebar-buffer-name))
         (target (decknix--layout-active-target))
-        (ov decknix--layout-active-overlay))
+        (ov decknix--layout-active-overlay)
+        (gov decknix--layout-active-group-overlay))
     (when (buffer-live-p sidebar)
       (with-current-buffer sidebar
-        (unless (and (not force) ov (eq (overlay-buffer ov) sidebar)
-                     (< (overlay-start ov) (overlay-end ov))
-                     (eq (overlay-get ov 'decknix-target) target))
-          (let ((row (and decknix-sidebar-highlight-active-session
-                          (buffer-live-p target)
-                          (decknix--layout-own-row target))))
-            (if (null row)
-                (when ov (delete-overlay ov))
-              (unless (and ov (eq (overlay-buffer ov) sidebar))
-                (setq ov (make-overlay row row)
-                      decknix--layout-active-overlay ov)
-                (overlay-put ov 'face 'decknix-sidebar-active-session)
-                (overlay-put ov 'priority -50))
-              (move-overlay ov row (save-excursion (goto-char row)
-                                                   (min (point-max) (1+ (line-end-position)))))
-              (overlay-put ov 'decknix-target target))))))))
+        (let ((prev-target (and ov (eq (overlay-buffer ov) sidebar)
+                                (overlay-get ov 'decknix-target))))
+          (unless (and (not force) ov (eq (overlay-buffer ov) sidebar)
+                       (< (overlay-start ov) (overlay-end ov))
+                       (eq prev-target target))
+            (let ((row (and decknix-sidebar-highlight-active-session
+                            (buffer-live-p target)
+                            (decknix--layout-own-row target))))
+              (if (null row)
+                  (progn
+                    (when ov (delete-overlay ov))
+                    (when gov (delete-overlay gov)))
+                (unless (and ov (eq (overlay-buffer ov) sidebar))
+                  (setq ov (make-overlay row row)
+                        decknix--layout-active-overlay ov)
+                  (overlay-put ov 'face 'decknix-sidebar-active-session)
+                  (overlay-put ov 'priority -50))
+                (move-overlay ov row (save-excursion (goto-char row)
+                                                     (min (point-max) (1+ (line-end-position)))))
+                (overlay-put ov 'decknix-target target)
+                (let ((gbounds (decknix--layout-group-bounds row)))
+                  (if (null gbounds)
+                      (when gov (delete-overlay gov))
+                    (unless (and gov (eq (overlay-buffer gov) sidebar))
+                      (setq gov (make-overlay (car gbounds) (cdr gbounds))
+                            decknix--layout-active-group-overlay gov)
+                      (overlay-put gov 'face 'decknix-sidebar-active-group)
+                      (overlay-put gov 'priority -60))
+                    (move-overlay gov (car gbounds) (cdr gbounds)))))
+              (when (and (not force)
+                         (eq decknix-sidebar-wip-detail-mode 'active)
+                         (not (eq prev-target target))
+                         (fboundp 'agent-shell-workspace-sidebar-refresh))
+                (ignore-errors (agent-shell-workspace-sidebar-refresh))))))))))
 
 (defun decknix--layout-active-timer-fire ()
   "Run the coalesced active-row highlight refresh."

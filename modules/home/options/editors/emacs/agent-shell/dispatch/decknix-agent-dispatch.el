@@ -164,12 +164,13 @@ interrupter back, so two sessions cannot cancel each other in a loop."
   :type 'integer
   :group 'decknix-agent-dispatch)
 
-(defcustom decknix-agent-dispatch-lifecycle-policy 'coordinator
+(defcustom decknix-agent-dispatch-lifecycle-policy 'always
   "Who may spawn or retire sessions with a version 3 request.
 `never'       nobody.
-`coordinator' (default) senders tagged with one of
+`coordinator' senders tagged with one of
               `decknix-agent-dispatch-coordinator-tags'.
-`always'      any sender, including a request with no sender."
+`always'      (default) any sender, so any interactive or coordinator
+              session can spawn and retire worker engine rooms."
   :type '(choice (const never) (const coordinator) (const always))
   :group 'decknix-agent-dispatch)
 
@@ -879,10 +880,22 @@ Fails closed: an unreadable process mark counts as unsent input."
 (defun decknix-agent-dispatch--set-buffer-model (buf model-id)
   "Switch BUF to MODEL-ID over ACP and persist it for the conversation."
   (when (and (buffer-live-p buf) (stringp model-id) (not (string-empty-p model-id)))
-    (when (fboundp 'agent-shell--set-default-model)
-      (ignore-errors
-        (agent-shell--set-default-model :shell-buffer buf :model-id model-id)))
     (with-current-buffer buf
+      (when (fboundp 'agent-shell--set-default-model)
+        (ignore-errors
+          (let* ((state (and (fboundp 'agent-shell--state) (agent-shell--state)))
+                 (adv (mapcar (lambda (m) (alist-get :model-id m))
+                              (map-nested-elt state '(:session :models))))
+                 (eff (cond
+                       ((or (null adv) (member model-id adv)) model-id)
+                       ((and (equal model-id "claude-sonnet-5-5")
+                             (member "claude-sonnet-5" adv))
+                        "claude-sonnet-5")
+                       ((and (equal model-id "claude-haiku-5-5")
+                             (member "claude-haiku-4-5" adv))
+                        "claude-haiku-4-5")
+                       (t model-id))))
+            (agent-shell--set-default-model :shell-buffer buf :model-id eff))))
       (when (and (bound-and-true-p decknix--agent-conv-key)
                  (fboundp 'decknix--agent-session-save-model-for-conv-key))
         (ignore-errors
@@ -1142,10 +1155,17 @@ The brief is the session's first message, which also keys its tags."
 
 (defun decknix-agent-dispatch--write-spawned (id body)
   "Write ID's spawned receipt with BODY and stop tracking it."
-  (remhash id decknix-agent-dispatch--spawning)
-  (decknix-agent-dispatch--write-json
-   "receipts" (concat id ".spawned.json")
-   (append (list :v 1 :id id :at (decknix-agent-dispatch--now)) body)))
+  (let* ((entry (gethash id decknix-agent-dispatch--spawning))
+         (from (plist-get (plist-get entry :req) :from))
+         (sid (plist-get body :session_id))
+         (now (decknix-agent-dispatch--now)))
+    (when (and from sid (stringp sid) (not (string-empty-p sid)))
+      (puthash sid (list :id id :at now :from from)
+               decknix-agent-dispatch--last-delivered))
+    (remhash id decknix-agent-dispatch--spawning)
+    (decknix-agent-dispatch--write-json
+     "receipts" (concat id ".spawned.json")
+     (append (list :v 1 :id id :at now) body))))
 
 (defun decknix-agent-dispatch--spawn-failed (id reason)
   "Settle spawn ID as failed for REASON, giving back its rate-limit slot.

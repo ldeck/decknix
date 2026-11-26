@@ -1264,5 +1264,40 @@ hides one silently; Reviews and WIP list only the board's sessions."
     (setq decknix--hub-jira-tasks '((items . (((key . "HX-3") (status_category . "done"))))))
     (should-not (plist-get (decknix--layout-pr-ship-lines pr) :next))))
 
+(ert-deftest decknix-layout-render--strips-parent-coordinator-tags-and-maps-engine-badges ()
+  "Child lanes strip their parent coordinator's scope tags and map models to compact badges."
+  (should (equal "lane-01" (decknix--layout-strip-parent-tags "us/lane-01" '("coordinator" "hx" "us"))))
+  (should (equal "lane-06/spike" (decknix--layout-strip-parent-tags "lane-06/us/spike" '("coordinator" "hx" "us"))))
+  (should (equal "v12" (decknix--layout-engine-badge-for-model "claude-opus-5-5")))
+  (should (equal "v10" (decknix--layout-engine-badge-for-model "claude-fable-5-2")))
+  (should (equal "v8" (decknix--layout-engine-badge-for-model "claude-sonnet-5-5")))
+  (should (equal "v6" (decknix--layout-engine-badge-for-model "claude-haiku-5-5")))
+  (should (equal "vtx" (decknix--layout-engine-badge-for-model "google-vertex/gemini-4-argon:high")))
+  (should (equal "cdx" (decknix--layout-engine-badge-for-model "openai-codex/gpt-6.2-sol"))))
+
+(ert-deftest decknix-layout-render--group-overlay-highlights-enclosing-block ()
+  "The active session gets both a row overlay and an enclosing group overlay."
+  (decknix-lr-test--with-buffers '("*Claude: a*" "*Claude: b*")
+    (let ((text (concat " WIP (2)\n"
+                        (propertize " ●  a\n    ↳ child a\n"
+                                    'decknix-layout-buffer "*Claude: a*"
+                                    'decknix-layout-group-id "team:a")
+                        (propertize " ●  b\n"
+                                    'decknix-layout-buffer "*Claude: b*"
+                                    'decknix-layout-group-id "team:b"))))
+      (decknix-lr-test--with-sidebar text
+        (cl-letf (((symbol-function 'selected-window) (lambda () 'w))
+                  ((symbol-function 'window-buffer) (lambda (_w) (get-buffer "*Claude: a*"))))
+          (decknix-layout-highlight-active t)
+          (should (equal " ●  a\n" (decknix-lr-test--highlighted-text)))
+          (should decknix--layout-active-group-overlay)
+          (should (eq 'decknix-sidebar-active-group
+                      (overlay-get decknix--layout-active-group-overlay 'face)))
+          (should (equal " ●  a\n    ↳ child a\n"
+                         (with-current-buffer (overlay-buffer decknix--layout-active-group-overlay)
+                           (buffer-substring-no-properties
+                            (overlay-start decknix--layout-active-group-overlay)
+                            (overlay-end decknix--layout-active-group-overlay))))))))))
+
 (provide 'decknix-sidebar-layout-render-test)
 ;;; decknix-sidebar-layout-render-test.el ends here

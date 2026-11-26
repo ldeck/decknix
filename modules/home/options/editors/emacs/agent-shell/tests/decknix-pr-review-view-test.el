@@ -135,5 +135,29 @@
                 (should-not (string-match-p "STALE" (buffer-string)))))
           (kill-buffer buf))))))
 
+(ert-deftest decknix-prv--cycle-verdict-and-edit-inline-comments ()
+  "Inline comments and verdict can be edited in place and written back to plan.json."
+  (let ((decknix-pr-review-view-gh-function #'ignore)
+        (decknix-pr-review-view-state-root (make-temp-file "prv" t)))
+    (cl-letf (((symbol-function 'pop-to-buffer) #'ignore))
+      (let ((buf (decknix-pr-review-view-open "o" "r" 7)))
+        (unwind-protect
+            (with-current-buffer buf
+              (decknix-pr-review-view-add-inline-comment "src/Foo.kt" 42 "nit: rename x")
+              (should (string-match-p "src/Foo.kt:42  nit: rename x" (buffer-string)))
+              (should (string-match-p "LGTM \\+ 1 inline comment" (buffer-string)))
+              (decknix-pr-review-view-cycle-verdict)
+              (should (string-match-p "verdict  COMMENT" (buffer-string)))
+              (goto-char (point-min))
+              (search-forward "src/Foo.kt:42")
+              (decknix-pr-review-view-delete-inline-comment)
+              (should-not (string-match-p "src/Foo.kt:42" (buffer-string)))
+              (should (string-match-p "Before (What)"
+                                      (decknix-pr-review-view-canvas-html
+                                       '((title . "T"))
+                                       (plist-get decknix-pr-review-view--data :plan)
+                                       nil))))
+          (kill-buffer buf))))))
+
 (provide 'decknix-pr-review-view-test)
 ;;; decknix-pr-review-view-test.el ends here

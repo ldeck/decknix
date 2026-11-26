@@ -544,6 +544,29 @@ fn read_brief(file: Option<String>, stdin: bool, args: Vec<String>) -> Result<St
     }
 }
 
+fn inherit_sender_scope_tags(tags: Vec<String>, loaded: &Loaded, from: Option<&str>) -> Vec<String> {
+    let is_lane = tags.iter().any(|t| t.to_ascii_lowercase().starts_with("lane-"));
+    let Some(fid) = from.filter(|_| is_lane) else {
+        return tags;
+    };
+    let Some(parent) = loaded.cands.iter().find(|c| c.id == fid) else {
+        return tags;
+    };
+    let mut out = Vec::new();
+    for pt in &parent.tags {
+        let low = pt.to_ascii_lowercase();
+        if !matches!(low.as_str(), "coordinator" | "auto" | "review")
+            && !low.starts_with("lane-")
+            && !tags.iter().any(|t| t.eq_ignore_ascii_case(pt))
+            && !out.iter().any(|t: &String| t.eq_ignore_ascii_case(pt))
+        {
+            out.push(pt.clone());
+        }
+    }
+    out.extend(tags);
+    out
+}
+
 fn sender(loaded: &Loaded, from: Option<String>) -> Result<(Option<String>, Option<String>)> {
     let from = from.or_else(session_msg::default_from);
     if let Some(f) = &from {
@@ -654,6 +677,8 @@ pub fn cmd_spawn(
 
     let dirs = Dirs::resolve()?;
     let loaded = session_lookup::load(&dirs)?;
+    let (from, from_name) = sender(&loaded, from)?;
+    let tags = inherit_sender_scope_tags(tags, &loaded, from.as_deref());
     let now = now_secs();
     let resume = match plan_spawn(&loaded.cands, &tags, &ws, no_resume) {
         SpawnPlan::Existing(i) => {
@@ -704,7 +729,6 @@ pub fn cmd_spawn(
             return Ok(session_msg::EXIT_NO_RECEIVER);
         }
     }
-    let (from, from_name) = sender(&loaded, from)?;
     let spec = SpawnSpec {
         workspace: ws.clone(),
         tags: tags.clone(),

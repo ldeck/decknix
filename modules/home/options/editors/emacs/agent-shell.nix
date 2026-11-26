@@ -5054,6 +5054,12 @@ ${optionalString cfg.tableOverlay.enable ''
         (require 'decknix-sidebar-layout-render)
         (require 'decknix-sidebar-tasks)
         (decknix--layout-load-state)
+        (setq decknix-sidebar-wip-detail-mode 'active
+              decknix-sidebar-strip-coordinator-tags t
+              decknix-sidebar-show-engine-badge t)
+        (unless (file-readable-p decknix--layout-state-file)
+          (puthash "wip-collapsed:unattended" t decknix--layout-expanded)
+          (puthash "wip-collapsed:tasks:pick-up" t decknix--layout-expanded))
         (decknix-sidebar-active-highlight-mode 1)
         ;; A new shipped-retention repaints at once and is persisted with
         ;; the other sidebar toggles.
@@ -7852,9 +7858,14 @@ duration -- the most important number on this branch."
         (setq decknix--sidebar-state-save-timer
               (run-with-idle-timer 30 t #'decknix--sidebar-idle-persist-state))
 
-        ;; Bind 'P' to restore all previous sessions
+        ;; Bind 'P' to restore all previous sessions, 'z' to cycle WIP detail
+        ;; mode (active -> actionable -> all), and 'e' to toggle engine badges.
         (define-key agent-shell-workspace-sidebar-mode-map
           (kbd "P") #'decknix--sidebar-restore-all-previous)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "z") #'decknix-layout-cycle-wip-detail)
+        (define-key agent-shell-workspace-sidebar-mode-map
+          (kbd "e") #'decknix-layout-toggle-engine-badge)
       ''
       + optionalString cfg.hub.enable ''
 
