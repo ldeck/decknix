@@ -114,15 +114,17 @@ and accumulates results."
                        #'decknix--agent-parse-pr-url
                        #'decknix--agent-pr-detect-workspace)))
       (condition-case err
-          (let ((before (buffer-list)))
-            (decknix--agent-quickaction-start
-             name tags workspace command model provider)
+          (let* ((before (buffer-list))
+                 (started-buf (decknix--agent-quickaction-start
+                               name tags workspace command model provider)))
             ;; `close: yes' in the batch arms the new session to auto-close once
             ;; it finishes its review turn cleanly (unattended reviews).
             (when (and (alist-get 'close spec)
-                       (fboundp 'decknix--agent-find-new-shell-buffer)
                        (fboundp 'decknix--agent-auto-close-arm))
-              (when-let ((buf (decknix--agent-find-new-shell-buffer before)))
+              (when-let ((buf (if (bufferp started-buf)
+                                  started-buf
+                                (and (fboundp 'decknix--agent-find-new-shell-buffer)
+                                     (decknix--agent-find-new-shell-buffer before)))))
                 (decknix--agent-auto-close-arm buf)))
             (push (list name "launched" nil) decknix--batch-launch-results))
         (error

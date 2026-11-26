@@ -3068,23 +3068,22 @@ calling `decknix-agent-session-new' interactively."
     ;; hand-off's conv-key immediately (immediate-flush branch); the
     ;; source session-id embedded in HANDOFF keeps forks of distinct
     ;; sources from colliding on the same conversation key.
-    (decknix--agent-session-new-post-create
-     before-buffers name tags workspace handoff provider)
-    ;; Auto-send the hand-off as the first user message once the ACP
-    ;; session is ready (mirrors `decknix--agent-quickaction-start').
-    (when handoff
-      (let ((shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
-        (when shell-buf
-          (agent-shell-subscribe-to
-           :shell-buffer shell-buf
-           :event 'prompt-ready
-           :on-event
-           (eval `(lambda (_event)
-                    (when (buffer-live-p ,shell-buf)
-                      (with-current-buffer ,shell-buf
-                        (goto-char (point-max))
-                        (shell-maker-submit :input ,handoff))))
-                 t)))))
+    (let ((shell-buf
+           (decknix--agent-session-new-post-create
+            before-buffers name tags workspace handoff provider)))
+      ;; Auto-send the hand-off as the first user message once the ACP
+      ;; session is ready (mirrors `decknix--agent-quickaction-start').
+      (when (and handoff shell-buf)
+        (agent-shell-subscribe-to
+         :shell-buffer shell-buf
+         :event 'prompt-ready
+         :on-event
+         (eval `(lambda (_event)
+                  (when (buffer-live-p ,shell-buf)
+                    (with-current-buffer ,shell-buf
+                      (goto-char (point-max))
+                      (shell-maker-submit :input ,handoff))))
+               t))))
     (message "Forking session \"%s\" in %s…" name workspace)))
 
 (defun decknix--agent-session-new-post-create
@@ -3227,7 +3226,8 @@ batch launches."
                                 (decknix--agent-register-session-id
                                  decknix--agent-conv-key sid)))))
                       (error nil))))
-               t))))))
+               t))))
+    shell-buf))
 
 (defun decknix-agent-reap-orphaned-bridges (&optional verbose)
   "Kill orphaned (ppid=1) agent-shell ACP bridge processes; return the count.

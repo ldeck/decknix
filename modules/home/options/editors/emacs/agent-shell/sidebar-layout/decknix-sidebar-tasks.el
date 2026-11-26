@@ -167,13 +167,16 @@ github-issues.json.  In progress lists issues a session works first."
          (issues (bound-and-true-p decknix--hub-github-issues))
          (sessions (decknix--layout-sessions))
          (tree (cdr decknix--layout-wip-memo))
-         (inputs (list jira chores issues sessions tree)))
+         (skeys (decknix--tasks-session-keys sessions (plist-get tree :sessions)))
+         (inputs (list jira chores issues tree skeys)))
     (if (and decknix--tasks-memo
-             (cl-every #'eq inputs (car decknix--tasks-memo)))
+             (eq jira (nth 0 (car decknix--tasks-memo)))
+             (eq chores (nth 1 (car decknix--tasks-memo)))
+             (eq issues (nth 2 (car decknix--tasks-memo)))
+             (eq tree (nth 3 (car decknix--tasks-memo)))
+             (equal skeys (nth 4 (car decknix--tasks-memo))))
         (cdr decknix--tasks-memo)
-      (let ((groups (decknix--tasks-groups
-                     jira chores issues
-                     (decknix--tasks-session-keys sessions (plist-get tree :sessions)))))
+      (let ((groups (decknix--tasks-groups jira chores issues skeys)))
         (setq decknix--tasks-memo (cons inputs groups))
         groups))))
 

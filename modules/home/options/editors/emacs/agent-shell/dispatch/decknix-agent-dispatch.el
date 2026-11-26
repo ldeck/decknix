@@ -1119,11 +1119,16 @@ The brief is the session's first message, which also keys its tags."
                 (model (or (plist-get spec :model) default-model)))
            (when (decknix-agent-dispatch--agent-refusal (plist-get spec :agent))
              (error "unknown agent %s" (plist-get spec :agent)))
-           (decknix--agent-quickaction-start
-            (plist-get spec :name) (plist-get spec :tags) (plist-get spec :workspace)
-            (plist-get spec :brief) model provider
-            (plist-get spec :mode) t)
-           (funcall callback (decknix--agent-find-new-shell-buffer before) nil))
+           (let ((started-buf
+                  (decknix--agent-quickaction-start
+                   (plist-get spec :name) (plist-get spec :tags) (plist-get spec :workspace)
+                   (plist-get spec :brief) model provider
+                   (plist-get spec :mode) t)))
+             (funcall callback
+                      (if (bufferp started-buf)
+                          started-buf
+                        (decknix--agent-find-new-shell-buffer before))
+                      nil)))
        (error (funcall callback nil (error-message-string err)))))))
 
 (defun decknix-agent-dispatch--resume-session (spec callback)

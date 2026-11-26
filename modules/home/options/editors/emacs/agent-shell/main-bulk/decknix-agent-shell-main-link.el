@@ -334,43 +334,43 @@ raises the usual attention indicator when it wants input."
                    t)))
         (agent-shell-start :config config)))
     (setq decknix--agent-session-cache-time 0)
-    (decknix--agent-session-new-post-create
-     before-buffers name tags workspace command provider broker-key)
-    ;; Record MODEL and ADDITIONAL-ROOTS so resume restores both.  MODEL
-    ;; is stored as the launcher's, not the user's: when the review
-    ;; purpose moves on, `decknix-agent-review-superseded-models' lets
-    ;; these conversations move with it while an explicit `C-c C-v'
-    ;; choice stays.  The conv-key is derived from COMMAND (the first
-    ;; user message), matching `decknix--agent-session-new-post-create'.
-    (when-let* ((conv-key (and (stringp command) (not (string-empty-p command))
-                               (decknix--agent-conversation-key command))))
-      (when (and (stringp model) (not (string-empty-p model)))
-        (decknix--agent-session-save-model-for-conv-key conv-key model 'launcher))
-      (when additional-roots
-        (decknix--agent-session-save-additional-roots-for-conv-key
-         conv-key additional-roots)))
-    ;; Record which PR a review session is on, so "does this PR already
-    ;; have a reviewer?" is answered from a fact rather than from the
-    ;; buffer name.  Captured HERE because NAME is still the launcher's
-    ;; `pr-<repo>-<number>' construction; reattach later renames the
-    ;; buffer from its tags, which is precisely what made the old
-    ;; name-matching check miss and spawn duplicate reviewers.
-    ;; Non-review quick actions yield no key and record nothing.
-    ;; REVIEW-PRS, when the caller knows them, is authoritative: a
-    ;; grouped session covers several PRs and its name encodes none of
-    ;; them, so there is nothing to derive.  Falling back to the name
-    ;; keeps single-PR launches working unchanged.
-    (let* ((pr-keys (or review-prs
-                        (when-let* ((k (decknix--hub-review-pr-key-from-name name)))
-                          (list k))))
-           (conv-key (and (stringp command) (not (string-empty-p command))
-                          (decknix--agent-conversation-key command))))
-      (when (and pr-keys conv-key)
-        (decknix--agent-save-review-prs-for-conv-key conv-key pr-keys)))
-    ;; Find the newly created shell buffer and subscribe to prompt-ready.
-    ;; agent-shell-start creates the buffer synchronously (mode-hook fires
-    ;; before it returns), so find-new-shell-buffer works immediately.
-    (let ((shell-buf (decknix--agent-find-new-shell-buffer before-buffers)))
+    (let ((shell-buf
+           (decknix--agent-session-new-post-create
+            before-buffers name tags workspace command provider broker-key)))
+      ;; Record MODEL and ADDITIONAL-ROOTS so resume restores both.  MODEL
+      ;; is stored as the launcher's, not the user's: when the review
+      ;; purpose moves on, `decknix-agent-review-superseded-models' lets
+      ;; these conversations move with it while an explicit `C-c C-v'
+      ;; choice stays.  The conv-key is derived from COMMAND (the first
+      ;; user message), matching `decknix--agent-session-new-post-create'.
+      (when-let* ((conv-key (and (stringp command) (not (string-empty-p command))
+                                 (decknix--agent-conversation-key command))))
+        (when (and (stringp model) (not (string-empty-p model)))
+          (decknix--agent-session-save-model-for-conv-key conv-key model 'launcher))
+        (when additional-roots
+          (decknix--agent-session-save-additional-roots-for-conv-key
+           conv-key additional-roots)))
+      ;; Record which PR a review session is on, so "does this PR already
+      ;; have a reviewer?" is answered from a fact rather than from the
+      ;; buffer name.  Captured HERE because NAME is still the launcher's
+      ;; `pr-<repo>-<number>' construction; reattach later renames the
+      ;; buffer from its tags, which is precisely what made the old
+      ;; name-matching check miss and spawn duplicate reviewers.
+      ;; Non-review quick actions yield no key and record nothing.
+      ;; REVIEW-PRS, when the caller knows them, is authoritative: a
+      ;; grouped session covers several PRs and its name encodes none of
+      ;; them, so there is nothing to derive.  Falling back to the name
+      ;; keeps single-PR launches working unchanged.
+      (let* ((pr-keys (or review-prs
+                          (when-let* ((k (decknix--hub-review-pr-key-from-name name)))
+                            (list k))))
+             (conv-key (and (stringp command) (not (string-empty-p command))
+                            (decknix--agent-conversation-key command))))
+        (when (and pr-keys conv-key)
+          (decknix--agent-save-review-prs-for-conv-key conv-key pr-keys)))
+      ;; Reuse SHELL-BUF returned by `decknix--agent-session-new-post-create'
+      ;; rather than calling `decknix--agent-find-new-shell-buffer' a second
+      ;; time after `post-create' has already stamped `decknix--agent-conv-key'.
       (when shell-buf
         (agent-shell-subscribe-to
          :shell-buffer shell-buf
@@ -383,7 +383,8 @@ raises the usual attention indicator when it wants input."
                       (shell-maker-submit :input ,command))
                     (message "Sent: %s"
                              (truncate-string-to-width ,command 60))))
-               t))))))
+               t)))
+      shell-buf)))
 
 
 (declare-function decknix--hub-bot-author-p "decknix-hub-mention-bot")
