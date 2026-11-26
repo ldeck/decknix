@@ -112,10 +112,17 @@
   "Called with (BUFFER SESSION-ID); returns the session's tags or nil.")
 
 (declare-function decknix-agent-turn-plan "decknix-agent-turn-signals" (&optional buffer))
+(declare-function decknix--agent-session-current-model-id "decknix-agent-session-model" ())
+(declare-function decknix--agent-session-model-for-conv-key "decknix-agent-session-model" (conv-key))
+(declare-function decknix-agent-engine-for-model "decknix-agent-purposes" (provider model))
 
 (defvar decknix-agent-session-export-plan-function
   (lambda (buf) (and (fboundp 'decknix-agent-turn-plan) (decknix-agent-turn-plan buf)))
   "Function of a buffer returning its last ACP plan progress plist, or nil.")
+
+(defvar decknix-agent-session-export-model-function
+  #'decknix-agent-session-export--model
+  "Called with a buffer; returns its model id string or nil.")
 
 (defvar decknix-agent-session-export-write-function #'decknix-hub-cache-write-string
   "Called with (FILE TEXT &optional FORCE); writes only when TEXT changed.")
@@ -235,6 +242,16 @@ stores a time, and edits the tool list only for tool call updates."
                               '(:agent-config :identifier))))
       (and id (format "%s" id)))))
 
+(defun decknix-agent-session-export--model (buf)
+  "Model id BUF is running, or nil."
+  (ignore-errors
+    (with-current-buffer buf
+      (or (and (fboundp 'decknix--agent-session-current-model-id)
+               (decknix--agent-session-current-model-id))
+          (and (bound-and-true-p decknix--agent-conv-key)
+               (fboundp 'decknix--agent-session-model-for-conv-key)
+               (decknix--agent-session-model-for-conv-key decknix--agent-conv-key))))))
+
 (defun decknix-agent-session-export--closing (buf)
   (ignore-errors
     (or (and (fboundp 'decknix-agent-turn-closing-text)
@@ -296,41 +313,48 @@ lookup per sweep."
       (unless (equal state decknix-agent-session-export--state)
         (setq decknix-agent-session-export--state state
               decknix-agent-session-export--state-since now))
-      (list :v 1 :id sid :buffer (buffer-name buf)
-            :agent (decknix-agent-session-export--json-value
-                    (decknix-agent-session-export--agent buf))
-            :cwd (expand-file-name default-directory)
-            :tags (decknix-agent-session-export--tags buf sid)
-            :emacs_pid (emacs-pid)
-            :state state :status status
-            :busy (if busy t :false)
-            :busy_since (decknix-agent-session-export--json-value
-                         (and decknix-agent-session-export--busy-since
-                              (floor decknix-agent-session-export--busy-since)))
-            :state_since (floor decknix-agent-session-export--state-since)
-            :last_activity (decknix-agent-session-export--json-value
-                            (decknix-agent-session-export--bucket activity))
-            :tool (if tool
-                      (list :name (truncate-string-to-width (cadr tool) 120)
-                            :since (floor (cddr tool)))
-                    :null)
-            :tools_in_flight (length tools)
-            :tail (decknix-agent-session-export--json-value
-                   (decknix-agent-session-export--tail
-                    (decknix-agent-session-export--closing buf)))
-            :plan (decknix-agent-session-export--plan buf)
-            :queued (list :compose (or (and (fboundp 'decknix--compose-queue-count)
-                                            (ignore-errors (decknix--compose-queue-count buf)))
-                                       0)
-                          :dispatch (or (and (fboundp 'decknix-agent-dispatch-waiting-count)
-                                             (decknix-agent-dispatch-waiting-count sid))
-                                        0))
-            :last_delivered (if delivered
-                                (list :id (plist-get delivered :id)
-                                      :at (plist-get delivered :at)
-                                      :from (decknix-agent-session-export--json-value
-                                             (plist-get delivered :from)))
-                              :null)))))
+      (let* ((agent (decknix-agent-session-export--agent buf))
+             (model (ignore-errors
+                      (funcall decknix-agent-session-export-model-function buf)))
+             (engine (and agent model
+                          (fboundp 'decknix-agent-engine-for-model)
+                          (ignore-errors (decknix-agent-engine-for-model agent model)))))
+        (list :v 1 :id sid :buffer (buffer-name buf)
+              :agent (decknix-agent-session-export--json-value agent)
+              :model (decknix-agent-session-export--json-value model)
+              :engine (decknix-agent-session-export--json-value engine)
+              :cwd (expand-file-name default-directory)
+              :tags (decknix-agent-session-export--tags buf sid)
+              :emacs_pid (emacs-pid)
+              :state state :status status
+              :busy (if busy t :false)
+              :busy_since (decknix-agent-session-export--json-value
+                           (and decknix-agent-session-export--busy-since
+                                (floor decknix-agent-session-export--busy-since)))
+              :state_since (floor decknix-agent-session-export--state-since)
+              :last_activity (decknix-agent-session-export--json-value
+                              (decknix-agent-session-export--bucket activity))
+              :tool (if tool
+                        (list :name (truncate-string-to-width (cadr tool) 120)
+                              :since (floor (cddr tool)))
+                      :null)
+              :tools_in_flight (length tools)
+              :tail (decknix-agent-session-export--json-value
+                     (decknix-agent-session-export--tail
+                      (decknix-agent-session-export--closing buf)))
+              :plan (decknix-agent-session-export--plan buf)
+              :queued (list :compose (or (and (fboundp 'decknix--compose-queue-count)
+                                              (ignore-errors (decknix--compose-queue-count buf)))
+                                         0)
+                            :dispatch (or (and (fboundp 'decknix-agent-dispatch-waiting-count)
+                                               (decknix-agent-dispatch-waiting-count sid))
+                                          0))
+              :last_delivered (if delivered
+                                  (list :id (plist-get delivered :id)
+                                        :at (plist-get delivered :at)
+                                        :from (decknix-agent-session-export--json-value
+                                               (plist-get delivered :from)))
+                                :null))))))
 
 (defun decknix-agent-session-export--dead (snapshot now)
   "SNAPSHOT of a session whose buffer has gone, as written once at NOW."

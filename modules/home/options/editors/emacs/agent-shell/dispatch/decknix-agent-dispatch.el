@@ -195,6 +195,22 @@ See `decknix-agent-dispatch-counted-lanes' for what counts."
   :type 'integer
   :group 'decknix-agent-dispatch)
 
+(defcustom decknix-agent-dispatch-warm-lanes 8
+  "Target number of warm lanes kept alive before idle overflow lanes are reaped."
+  :type 'integer
+  :group 'decknix-agent-dispatch)
+
+(defcustom decknix-agent-dispatch-overflow-idle-seconds 2700
+  "Quiet seconds before an idle overflow lane (beyond `decknix-agent-dispatch-warm-lanes') is retired."
+  :type 'integer
+  :group 'decknix-agent-dispatch)
+
+(defvar decknix-agent-dispatch-reap-interval 60
+  "Seconds between overflow-lane reap checks.")
+
+(defvar decknix-agent-dispatch--last-reap-at 0
+  "`float-time' of the last overflow-lane reap check.")
+
 (defcustom decknix-agent-dispatch-spawn-counted-tag-regexp "\\`lane-[0-9]+\\'"
   "A live session with a tag matching this (ignoring case) counts as a lane.
 Lanes count toward `decknix-agent-dispatch-spawn-max-live', as do sessions
@@ -407,7 +423,8 @@ and the mtime check make a new request visible well before this.")
      ((and (equal mode "interrupt")
            (not (and (stringp reason) (not (string-empty-p (string-trim reason))))))
       "interrupt-needs-reason")
-     ((and name (not (and (stringp name) (<= (length name) 80)))) "bad-from-name"))))
+     ((and name (not (and (stringp name) (<= (length name) 80)))) "bad-from-name")
+     ((decknix-agent-dispatch--short-strings-bad req '(:model :engine)) "bad-field"))))
 
 (defun decknix-agent-dispatch--mode (req)
   "Delivery mode of REQ: `idle', `now' or `interrupt'; nil for version 1."
@@ -477,7 +494,7 @@ and the mtime check make a new request visible well before this.")
          ((decknix-agent-dispatch--text-bad (plist-get req :brief)
                                             (plist-get req :brief_sha256)))
          ((and resume (not (decknix-agent-dispatch--uuid-p resume))) "bad-resume-id")
-         ((decknix-agent-dispatch--short-strings-bad req '(:agent :name :model :mode))
+         ((decknix-agent-dispatch--short-strings-bad req '(:agent :name :model :mode :engine))
           "bad-field"))))
      (t
       (cond
@@ -855,14 +872,40 @@ Fails closed: an unreadable process mark counts as unsent input."
     (decknix-agent-dispatch--finish
      id sid "accepted" nil (decknix-agent-dispatch--info req input buf))))
 
+(declare-function agent-shell--set-default-model "ext:agent-shell" (&rest args))
+(declare-function decknix--agent-session-save-model-for-conv-key
+                  "decknix-agent-session-model" (conv-key model-id))
+
+(defun decknix-agent-dispatch--set-buffer-model (buf model-id)
+  "Switch BUF to MODEL-ID over ACP and persist it for the conversation."
+  (when (and (buffer-live-p buf) (stringp model-id) (not (string-empty-p model-id)))
+    (when (fboundp 'agent-shell--set-default-model)
+      (ignore-errors
+        (agent-shell--set-default-model :shell-buffer buf :model-id model-id)))
+    (with-current-buffer buf
+      (when (and (bound-and-true-p decknix--agent-conv-key)
+                 (fboundp 'decknix--agent-session-save-model-for-conv-key))
+        (ignore-errors
+          (decknix--agent-session-save-model-for-conv-key
+           decknix--agent-conv-key model-id))))))
+
+(defvar decknix-agent-dispatch-set-model-function
+  #'decknix-agent-dispatch--set-buffer-model
+  "Called with (BUFFER MODEL-ID) before submitting when a request carries `:model'.")
+
 (defun decknix-agent-dispatch--attempt (id req buf input)
   "Submit INPUT to BUF, the one irreversible step; always ends with a receipt."
-  (let ((sid (plist-get req :session_id)))
+  (let ((sid (plist-get req :session_id))
+        (model (plist-get req :model)))
     (with-file-modes #o600
       (write-region "1" nil (decknix-agent-dispatch--path "inflight" id ".attempt")
                     nil 'silent))
     (condition-case err
-        (let ((ok (funcall decknix-agent-dispatch-submit-function buf input)))
+        (progn
+          (when (and (stringp model) (not (string-empty-p model))
+                     (functionp decknix-agent-dispatch-set-model-function))
+            (ignore-errors (funcall decknix-agent-dispatch-set-model-function buf model)))
+          (let ((ok (funcall decknix-agent-dispatch-submit-function buf input)))
           (cond
            ((not ok)
             (decknix-agent-dispatch--finish
@@ -872,7 +915,7 @@ Fails closed: an unreadable process mark counts as unsent input."
            (t
             (decknix-agent-dispatch--finish
              id sid "unknown" "no-busy-evidence-after-submit"
-             (decknix-agent-dispatch--info req input buf)))))
+             (decknix-agent-dispatch--info req input buf))))))
       (error
        (decknix-agent-dispatch--finish
         id sid "unknown"
@@ -1045,19 +1088,27 @@ waits like an idle request until its own expiry rather than being lost."
       (decknix-agent-spawn-enqueue thunk)
     (funcall thunk)))
 
+(declare-function decknix-agent-purpose-resolve "decknix-agent-purposes" (purpose))
+
 (defun decknix-agent-dispatch--start-session (spec callback)
   "Default spawn: a background quick-action session for SPEC, throttled.
 The brief is the session's first message, which also keys its tags."
   (decknix-agent-dispatch--enqueue
    (lambda ()
      (condition-case err
-         (let ((before (buffer-list))
-               (provider (decknix-agent-dispatch--agent-provider (plist-get spec :agent))))
+         (let* ((before (buffer-list))
+                (provider (decknix-agent-dispatch--agent-provider (plist-get spec :agent)))
+                (default-model (and (null (plist-get spec :model))
+                                    (fboundp 'decknix-agent-purpose-resolve)
+                                    (let ((cfg (decknix-agent-purpose-resolve 'new-session)))
+                                      (and (eq provider (plist-get cfg :provider))
+                                           (plist-get cfg :model)))))
+                (model (or (plist-get spec :model) default-model)))
            (when (decknix-agent-dispatch--agent-refusal (plist-get spec :agent))
              (error "unknown agent %s" (plist-get spec :agent)))
            (decknix--agent-quickaction-start
             (plist-get spec :name) (plist-get spec :tags) (plist-get spec :workspace)
-            (plist-get spec :brief) (plist-get spec :model) provider
+            (plist-get spec :brief) model provider
             (plist-get spec :mode) t)
            (funcall callback (decknix--agent-find-new-shell-buffer before) nil))
        (error (funcall callback nil (error-message-string err)))))))
@@ -1392,6 +1443,90 @@ less than `decknix-agent-dispatch-rescan-interval' seconds before NOW."
        (< (- now (cdr decknix-agent-dispatch--pending-seen))
           decknix-agent-dispatch-rescan-interval)))
 
+(defun decknix-agent-dispatch--lane-number (tags)
+  "Extract the numeric suffix from a `lane-NN' tag in TAGS, or 9999."
+  (let ((hit (seq-find (lambda (tg)
+                         (and (stringp tg)
+                              (string-match "\\`lane-\\([0-9]+\\)\\'" (downcase tg))))
+                       tags)))
+    (if hit
+        (string-to-number (match-string 1 (downcase hit)))
+      9999)))
+
+(defun decknix-agent-dispatch-select-overflow-lanes (lanes warm-cap idle-threshold now)
+  "Return the buffers from LANES to retire as idle overflow at NOW.  Pure.
+LANES is a list of plists (:buffer :lane-num :idle-since :busy :unsent
+:visible :queued :protected).  Never retires when total lanes <= WARM-CAP."
+  (let ((excess (- (length lanes) warm-cap)))
+    (when (> excess 0)
+      (let* ((eligible
+              (seq-filter
+               (lambda (l)
+                 (let ((since (plist-get l :idle-since)))
+                   (and (not (plist-get l :busy))
+                        (not (plist-get l :unsent))
+                        (not (plist-get l :visible))
+                        (zerop (or (plist-get l :queued) 0))
+                        (not (plist-get l :protected))
+                        (numberp since)
+                        (>= (- now since) idle-threshold))))
+               lanes))
+             (sorted
+              (sort (copy-sequence eligible)
+                    (lambda (a b)
+                      (let ((na (or (plist-get a :lane-num) 9999))
+                            (nb (or (plist-get b :lane-num) 9999)))
+                        (if (/= na nb)
+                            (> na nb)
+                          (< (or (plist-get a :idle-since) 0)
+                             (or (plist-get b :idle-since) 0))))))))
+        (mapcar (lambda (l) (plist-get l :buffer))
+                (seq-take sorted excess))))))
+
+(defvar decknix-agent-session-export--last-activity)
+
+(defun decknix-agent-dispatch--maybe-reap-overflow-lanes (now)
+  "Retire idle overflow lanes beyond `decknix-agent-dispatch-warm-lanes'."
+  (when (and (> decknix-agent-dispatch-warm-lanes 0)
+             (> decknix-agent-dispatch-overflow-idle-seconds 0)
+             (>= (- now decknix-agent-dispatch--last-reap-at)
+                 decknix-agent-dispatch-reap-interval)
+             (functionp decknix-agent-dispatch-retire-function))
+    (setq decknix-agent-dispatch--last-reap-at now)
+    (let* ((live (seq-filter #'decknix-agent-dispatch--counted-lane-p
+                             (decknix-agent-dispatch--live-buffers)))
+           (lanes
+            (when (> (length live) decknix-agent-dispatch-warm-lanes)
+              (mapcar
+               (lambda (buf)
+                 (let* ((tags (decknix-agent-dispatch--live-tags buf))
+                        (sid (ignore-errors
+                               (funcall decknix-agent-dispatch-session-id-function buf)))
+                        (act (and (local-variable-p 'decknix-agent-session-export--last-activity buf)
+                                  (buffer-local-value 'decknix-agent-session-export--last-activity buf))))
+                   (list :buffer buf
+                         :lane-num (decknix-agent-dispatch--lane-number tags)
+                         :idle-since act
+                         :busy (decknix-agent-dispatch--busy-p buf)
+                         :unsent (decknix-agent-dispatch--unsent-input-p buf)
+                         :visible (and (get-buffer-window buf t) t)
+                         :queued (if sid (decknix-agent-dispatch-waiting-count sid) 0)
+                         :protected (seq-some
+                                     (lambda (p)
+                                       (decknix-agent-dispatch--tags-cover-p tags (list p)))
+                                     decknix-agent-dispatch-retire-protected-tags))))
+               live)))
+           (doomed (and lanes
+                        (decknix-agent-dispatch-select-overflow-lanes
+                         lanes decknix-agent-dispatch-warm-lanes
+                         decknix-agent-dispatch-overflow-idle-seconds now))))
+      (dolist (buf doomed)
+        (when (buffer-live-p buf)
+          (let ((name (buffer-name buf)))
+            (ignore-errors
+              (funcall decknix-agent-dispatch-retire-function buf)
+              (message "decknix-agent-dispatch: auto-retired idle overflow lane %s" name))))))))
+
 (defun decknix-agent-dispatch--tick ()
   "Scan for new requests and advance waiting ones.  Cheap; never blocks.
 The 2 s poll lists pending/ only when the directory's mtime moved since a
@@ -1426,7 +1561,8 @@ what froze typing (102 hitches, worst 19 s) while nothing was pending."
                 (decknix-agent-dispatch--check-answered id)
               (error (remhash id decknix-agent-dispatch--delivered)
                      (message "decknix-agent-dispatch: %s: answer check failed: %s"
-                              id (error-message-string err))))))
+                              id (error-message-string err)))))
+          (ignore-errors (decknix-agent-dispatch--maybe-reap-overflow-lanes now)))
       (error (message "decknix-agent-dispatch: tick failed: %s"
                       (error-message-string err))))))
 

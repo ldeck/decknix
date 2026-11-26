@@ -330,6 +330,7 @@ Commands:
   tag       Add or remove tags on a session's conversation
   link-pr   Link a GitHub PR to a session's conversation, as the sidebar's "linked PRs" (idempotent: an existing link of that PR is kept)
   tags      List every tag with its session count, live count and sessions; spellings that differ only in case or separators are grouped
+  engines   List available engine rooms (capability/cost tiers) and live quota status
 
 Options:
   -h, --help
@@ -465,6 +466,12 @@ Options:
       --reason <REASON>
           Why; shown in the receiving session's transcript (required for interrupt)
 
+      --engine <ENGINE>
+          Engine room tier to switch the target lane to before sending (e.g. flagship/v12, workhorse/v8, fast/v6, vertex, codex, utility/v4, local)
+
+      --model <MODEL>
+          Model to switch the target lane to before sending (overrides --engine)
+
       --notify
           Leave notices in the sender's inbox on delivered, answered and failure
 
@@ -499,19 +506,20 @@ Options:
       --tag <TAGS>
           Tags the lane carries (comma-separated or repeated); all must match for an existing session to count as this lane
 
-      --agent <AGENT>
-          Which agent: claude, auggie or pi
+      --engine <ENGINE>
+          Engine room tier (flagship/v12, workhorse/v8, fast/v6, vertex, vertex-fast, utility/v4, codex, codex-fast, local)
 
-          [default: claude]
+      --agent <AGENT>
+          Which agent: claude, auggie or pi (defaults to --engine's agent, else claude)
 
       --name <NAME>
           Buffer name (default: the tags joined with `/`)
 
       --model <MODEL>
-          Model the session starts on
+          Model the session starts on (defaults to --engine's model)
 
       --mode <MODE>
-          Permission/session mode (e.g. Claude `auto`)
+          Permission/session mode (e.g. Claude `auto` or `bypassPermissions`)
 
       --brief-file <BRIEF_FILE>
           Read the brief (the first message) from a file
@@ -931,6 +939,21 @@ Options:
 
       --json
           Emit JSON instead of aligned columns
+
+  -h, --help
+          Print help
+```
+
+## `decknix session engines`
+
+```text
+List available engine rooms (capability/cost tiers) and live quota status
+
+Usage: decknix session engines [OPTIONS]
+
+Options:
+      --json
+          Emit JSON
 
   -h, --help
           Print help

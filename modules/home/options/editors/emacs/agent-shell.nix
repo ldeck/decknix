@@ -3577,6 +3577,30 @@ in
         };
         mode = modeOption "auto";
       };
+      ops-pr-review = {
+        provider = mkOption {
+          type = types.str;
+          default = "claude-code";
+          example = "pi";
+          description = ''
+            Agent provider used when auto-review dispatches a GitOps / K8s
+            manifest repository PR (matched by `decknix-auto-review-ops-repo-regexp').
+            See `purposes.pr-review.provider' for validation semantics.
+          '';
+        };
+        model = mkOption {
+          type = types.nullOr types.str;
+          default = "claude-sonnet-5-5";
+          example = "claude-sonnet-5-5";
+          description = ''
+            Model id pinned for GitOps / K8s manifest PR reviews (`k8s-*',
+            `helix-foundations', `platform-helm-charts').  Defaults to Sonnet
+            so routine manifest and image-tag bumps do not consume flagship
+            Opus quota.
+          '';
+        };
+        mode = modeOption "auto";
+      };
       new-session = {
         provider = mkOption {
           type = types.str;
@@ -4249,6 +4273,13 @@ in
                                   :mode     ${if cfg.purposes.pr-review.mode == null
                                              then "nil"
                                              else ''"${cfg.purposes.pr-review.mode}"''}))
+                (ops-pr-review . (:provider ${cfg.purposes.ops-pr-review.provider}
+                                  :model    ${if cfg.purposes.ops-pr-review.model == null
+                                             then "nil"
+                                             else ''"${cfg.purposes.ops-pr-review.model}"''}
+                                  :mode     ${if cfg.purposes.ops-pr-review.mode == null
+                                             then "nil"
+                                             else ''"${cfg.purposes.ops-pr-review.mode}"''}))
                 (bot-pr-review . (:provider ${cfg.purposes.bot-pr-review.provider}
                                   :model    ${if cfg.purposes.bot-pr-review.model == null
                                              then "nil"
@@ -4264,6 +4295,8 @@ in
                                              then "nil"
                                              else ''"${cfg.purposes.new-session.mode}"''}))))
         (decknix-agent-purpose-validate)
+        (defvar decknix-agent-purpose-quota-fallback-enable)
+        (setq decknix-agent-purpose-quota-fallback-enable t)
         ;; The `new-session' purpose's (validated) provider becomes the
         ;; framework default provider: QUICK `C-u C-c A n' and the
         ;; resume/fork fallback consult `decknix-agent-default-provider'.

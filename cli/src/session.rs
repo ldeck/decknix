@@ -145,6 +145,12 @@ pub enum SessionAction {
         /// Why; shown in the receiving session's transcript (required for interrupt)
         #[arg(long)]
         reason: Option<String>,
+        /// Engine room tier to switch the target lane to before sending (e.g. flagship/v12, workhorse/v8, fast/v6, vertex, codex, utility/v4, local)
+        #[arg(long)]
+        engine: Option<String>,
+        /// Model to switch the target lane to before sending (overrides --engine)
+        #[arg(long)]
+        model: Option<String>,
         /// Leave notices in the sender's inbox on delivered, answered and failure
         #[arg(long)]
         notify: bool,
@@ -169,16 +175,19 @@ pub enum SessionAction {
         /// for an existing session to count as this lane
         #[arg(long = "tag", required = true)]
         tags: Vec<String>,
-        /// Which agent: claude, auggie or pi
-        #[arg(long, default_value = "claude")]
-        agent: String,
+        /// Engine room tier (flagship/v12, workhorse/v8, fast/v6, vertex, vertex-fast, utility/v4, codex, codex-fast, local)
+        #[arg(long)]
+        engine: Option<String>,
+        /// Which agent: claude, auggie or pi (defaults to --engine's agent, else claude)
+        #[arg(long)]
+        agent: Option<String>,
         /// Buffer name (default: the tags joined with `/`)
         #[arg(long)]
         name: Option<String>,
-        /// Model the session starts on
+        /// Model the session starts on (defaults to --engine's model)
         #[arg(long)]
         model: Option<String>,
-        /// Permission/session mode (e.g. Claude `auto`)
+        /// Permission/session mode (e.g. Claude `auto` or `bypassPermissions`)
         #[arg(long)]
         mode: Option<String>,
         /// Read the brief (the first message) from a file
@@ -397,6 +406,12 @@ pub enum SessionAction {
         #[arg(long)]
         json: bool,
     },
+    /// List available engine rooms (capability/cost tiers) and live quota status
+    Engines {
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub fn run(action: SessionAction) -> Result<()> {
@@ -408,13 +423,13 @@ pub fn run(action: SessionAction) -> Result<()> {
         }
         SessionAction::Find { query, live, all, id, json } => exit_with(session_lookup::cmd_find(query, live, all, id, json)),
         SessionAction::Status { target, json } => exit_with(session_msg::cmd_status(&target, json)),
-        SessionAction::Send { target, message, message_file, stdin, when, ttl, from, reason, notify, wait_receipt, force, json } => {
-            exit_with(session_msg::cmd_send(&target, message, message_file, stdin, &when, ttl, from, reason, notify, wait_receipt, force, json))
+        SessionAction::Send { target, message, message_file, stdin, when, ttl, from, reason, engine, model, notify, wait_receipt, force, json } => {
+            exit_with(session_msg::cmd_send(&target, message, message_file, stdin, &when, ttl, from, reason, engine, model, notify, wait_receipt, force, json))
         }
         SessionAction::Spawn {
-            workspace, tags, agent, name, model, mode, brief_file, stdin, queue, no_resume, wait, ttl, from, json, brief,
+            workspace, tags, engine, agent, name, model, mode, brief_file, stdin, queue, no_resume, wait, ttl, from, json, brief,
         } => exit_with(session_lifecycle::cmd_spawn(
-            &workspace, tags, agent, name, model, mode, brief_file, stdin, brief, queue, no_resume, wait, &ttl, from, json,
+            &workspace, tags, agent, engine, name, model, mode, brief_file, stdin, brief, queue, no_resume, wait, &ttl, from, json,
         )),
         SessionAction::Retire { target, reason, force, wait, json } => {
             exit_with(session_lifecycle::cmd_retire(&target, reason, force, wait, json))
@@ -437,6 +452,7 @@ pub fn run(action: SessionAction) -> Result<()> {
         SessionAction::Tag { id, agent, add, remove } => cmd_tag(&paths, &agent, id, add, remove),
         SessionAction::LinkPr { session, url, agent, added } => cmd_link_pr(&paths, &agent, &session, &url, &added),
         SessionAction::Tags { live, json } => exit_with(session_lookup::cmd_tags(live, json)),
+        SessionAction::Engines { json } => exit_with(session_lifecycle::cmd_engines(json)),
     }
 }
 

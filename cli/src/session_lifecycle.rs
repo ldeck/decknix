@@ -51,6 +51,195 @@ pub fn spawn_agent_refusal(agent: &str) -> Option<String> {
         .then(|| format!("unknown agent {:?}; use one of: {}", agent, SPAWN_AGENTS.join(", ")))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EngineRoom {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub agent: &'static str,
+    pub model: &'static str,
+    pub mode: Option<&'static str>,
+    pub description: &'static str,
+}
+
+pub const ENGINES: &[EngineRoom] = &[
+    EngineRoom {
+        name: "flagship",
+        aliases: &["v12", "opus", "heavy"],
+        agent: "claude",
+        model: "claude-opus-5-5",
+        mode: Some("bypassPermissions"),
+        description: "Deep reasoning, architecture, complex debugging, high-risk PR review",
+    },
+    EngineRoom {
+        name: "fable",
+        aliases: &["v10", "fable-5-2"],
+        agent: "claude",
+        model: "claude-fable-5-2",
+        mode: Some("bypassPermissions"),
+        description: "High-capability Claude Fable 5.2 reasoning and synthesis",
+    },
+    EngineRoom {
+        name: "workhorse",
+        aliases: &["v8", "sonnet", "standard"],
+        agent: "claude",
+        model: "claude-sonnet-5-5",
+        mode: Some("bypassPermissions"),
+        description: "Standard feature implementation, test writing, PR shepherding, service PR review",
+    },
+    EngineRoom {
+        name: "fast",
+        aliases: &["v6", "haiku", "light"],
+        agent: "claude",
+        model: "claude-haiku-5-5",
+        mode: Some("bypassPermissions"),
+        description: "Mechanical edits, rebases, K8s GitOps / Helm PR review, CI triage",
+    },
+    EngineRoom {
+        name: "vertex",
+        aliases: &["v12-vertex", "argon"],
+        agent: "pi",
+        model: "google-vertex/gemini-4-argon:high",
+        mode: None,
+        description: "Quota-free flagship on GCP Vertex AI (Gemini 4 Argon)",
+    },
+    EngineRoom {
+        name: "vertex-fast",
+        aliases: &["v6-vertex", "neon"],
+        agent: "pi",
+        model: "google-vertex/gemini-4-neon",
+        mode: None,
+        description: "Quota-free fast workhorse on GCP Vertex AI (Gemini 4 Neon)",
+    },
+    EngineRoom {
+        name: "utility",
+        aliases: &["v4", "flash"],
+        agent: "pi",
+        model: "google-vertex/gemini-3.8-flash",
+        mode: None,
+        description: "Quota-free utility engine on GCP Vertex AI for bot PRs and sweeps",
+    },
+    EngineRoom {
+        name: "codex",
+        aliases: &["v10-codex", "gpt"],
+        agent: "pi",
+        model: "openai-codex/gpt-6.2-sol",
+        mode: None,
+        description: "OpenAI Codex Plus flagship (GPT-6.2 Sol) via Pi",
+    },
+    EngineRoom {
+        name: "codex-fast",
+        aliases: &["v6-codex", "astra"],
+        agent: "pi",
+        model: "openai-codex/gpt-6.2-astra",
+        mode: None,
+        description: "Fast OpenAI Codex Plus (GPT-6.2 Astra) via Pi",
+    },
+    EngineRoom {
+        name: "local",
+        aliases: &["v0", "zero-token", "llama"],
+        agent: "pi",
+        model: "llama.cpp/qwen3-coder-30b-a3b",
+        mode: None,
+        description: "Zero-token local open-source LLM via Pi llama.cpp router / Ollama",
+    },
+];
+
+pub fn resolve_engine(name: &str) -> Result<&'static EngineRoom> {
+    let n = name.trim().to_ascii_lowercase();
+    ENGINES
+        .iter()
+        .find(|e| e.name == n || e.aliases.contains(&n.as_str()))
+        .ok_or_else(|| {
+            let names: Vec<&str> = ENGINES.iter().map(|e| e.name).collect();
+            anyhow::anyhow!("unknown engine {:?}; use one of: {}", name, names.join(", "))
+        })
+}
+
+/// Resolve the model string for sending to an existing warm lane running `lane_agent`.
+pub fn resolve_engine_model_for_agent(engine: &EngineRoom, lane_agent: Option<&str>) -> &'static str {
+    let is_pi = matches!(lane_agent, Some("pi"));
+    let is_claude = matches!(lane_agent, Some("claude" | "claude-code"));
+    if is_claude && engine.agent != "claude" {
+        match engine.name {
+            "vertex" | "codex" => "claude-sonnet-5-5",
+            "vertex-fast" | "codex-fast" | "utility" | "local" => "claude-haiku-5-5",
+            _ => "claude-sonnet-5-5",
+        }
+    } else if is_pi && engine.agent != "pi" {
+        match engine.name {
+            "flagship" => "google-vertex/gemini-4-argon:high",
+            "workhorse" => "openai-codex/gpt-6.2-sol",
+            "fast" => "google-vertex/gemini-4-neon",
+            _ => engine.model,
+        }
+    } else {
+        engine.model
+    }
+}
+
+pub fn claude_quota_status() -> Option<(bool, f64)> {
+    let home = std::env::var("HOME").ok()?;
+    let p = PathBuf::from(home).join(".config/decknix/hub/token-quotas.json");
+    let v = read_json(&p)?;
+    let accts = v.get("accounts")?.as_array()?;
+    let claude = accts.iter().find(|a| str_of(a, "provider") == "anthropic")?;
+    let limit = claude.get("limit_reached").and_then(Value::as_bool).unwrap_or(false);
+    let pct = claude
+        .get("windows")
+        .and_then(Value::as_array)
+        .and_then(|ws| ws.iter().find(|w| str_of(w, "name") == "week"))
+        .and_then(|w| w.get("used_percent"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    Some((limit, pct))
+}
+
+pub fn cmd_engines(json_out: bool) -> Result<i32> {
+    let quota = claude_quota_status();
+    if json_out {
+        let items: Vec<Value> = ENGINES
+            .iter()
+            .map(|e| {
+                json!({
+                    "name": e.name,
+                    "aliases": e.aliases,
+                    "agent": e.agent,
+                    "model": e.model,
+                    "mode": e.mode,
+                    "description": e.description,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "claude_quota": quota.map(|(limit, pct)| json!({"limit_reached": limit, "week_used_percent": pct})),
+                "engines": items,
+            }))?
+        );
+        return Ok(0);
+    }
+    if let Some((limit, pct)) = quota {
+        println!(
+            "claude weekly quota: {:.1}% used{}",
+            pct,
+            if limit { " (LIMIT REACHED: Claude engines auto-failover to Pi Vertex)" } else if pct >= 80.0 { " (soft cap >=80%: flagship steps down to Sonnet)" } else { "" }
+        );
+    }
+    println!("{:<12}  {:<18}  {:<6}  {:<36}  {}", "ENGINE", "ALIASES", "AGENT", "MODEL", "USE FOR");
+    for e in ENGINES {
+        println!(
+            "{:<12}  {:<18}  {:<6}  {:<36}  {}",
+            e.name,
+            e.aliases.join(","),
+            e.agent,
+            e.model,
+            e.description
+        );
+    }
+    Ok(0)
+}
+
 #[derive(Subcommand)]
 pub enum DispatchAction {
     /// Is the Emacs dispatch receiver on? Heartbeat age, who armed it,
@@ -397,7 +586,8 @@ fn final_spawn_state(s: &str) -> bool {
 pub fn cmd_spawn(
     workspace: &str,
     tags: Vec<String>,
-    agent: String,
+    agent: Option<String>,
+    engine: Option<String>,
     name: Option<String>,
     model: Option<String>,
     mode: Option<String>,
@@ -411,6 +601,41 @@ pub fn cmd_spawn(
     from: Option<String>,
     json_out: bool,
 ) -> Result<i32> {
+    let resolved_engine = match engine.as_deref() {
+        Some(e) => match resolve_engine(e) {
+            Ok(er) => Some(er),
+            Err(err) => {
+                eprintln!("{}", err);
+                return Ok(EXIT_USAGE);
+            }
+        },
+        None => None,
+    };
+    let mut agent = agent.unwrap_or_else(|| resolved_engine.map(|e| e.agent.to_string()).unwrap_or_else(|| "claude".into()));
+    let mut model = model.or_else(|| resolved_engine.map(|e| e.model.to_string()));
+    let mut mode = mode.or_else(|| resolved_engine.and_then(|e| e.mode.map(str::to_string)));
+    if resolved_engine.is_some() && agent == "claude" {
+        if let Some((limit_reached, week_pct)) = claude_quota_status() {
+            if limit_reached {
+                let vmodel = if model.as_deref().map(|m| m.contains("opus")).unwrap_or(false) {
+                    "google-vertex/gemini-4-argon:high"
+                } else {
+                    "google-vertex/gemini-4-neon"
+                };
+                if !json_out {
+                    eprintln!("note: claude weekly quota reached (100%); failing over spawn to pi ({})", vmodel);
+                }
+                agent = "pi".into();
+                model = Some(vmodel.into());
+                mode = None;
+            } else if week_pct >= 80.0 && model.as_deref().map(|m| m.starts_with("claude-opus")).unwrap_or(false) {
+                if !json_out {
+                    eprintln!("note: claude weekly quota at {:.0}%; stepping spawn model down to claude-sonnet-5-5", week_pct);
+                }
+                model = Some("claude-sonnet-5-5".into());
+            }
+        }
+    }
     if let Some(why) = spawn_agent_refusal(&agent) {
         eprintln!("{}", why);
         return Ok(EXIT_USAGE);

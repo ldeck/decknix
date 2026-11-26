@@ -23,7 +23,7 @@ in {
   };
 
   config = mkIf cfg.enable {
-    home.packages = [ pkgs.qwen-code ];
+    home.packages = [ pkgs.unstable.qwen-code ];
 
     decknix.cli.agentSync.enable = true;
     decknix.cli.agentSync.files = mkIf (cfg.settings != {}) {

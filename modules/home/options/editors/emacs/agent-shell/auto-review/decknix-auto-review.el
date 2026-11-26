@@ -463,6 +463,29 @@ does; a group runs from the workspace with no worktree."
          primary)
       (decknix-auto-review--launch spec workspace))))
 
+(defcustom decknix-auto-review-ops-repo-regexp
+  "\\`\\(k8s-\\|helix-foundations\\'\\|platform-helm-charts\\'\\)"
+  "Regexp matching repository short names treated as GitOps/infra manifest repos.
+Auto-review routes these to the `ops-pr-review' purpose rather than `pr-review'
+so routine manifest/image bumps do not consume flagship Opus tokens."
+  :type 'regexp
+  :group 'decknix)
+
+(defun decknix-auto-review-ops-repo-p (repo)
+  "Return non-nil when REPO short name matches `decknix-auto-review-ops-repo-regexp'."
+  (and (stringp repo)
+       (string-match-p decknix-auto-review-ops-repo-regexp repo)
+       t))
+
+(defun decknix-auto-review-unit-purpose (action repo)
+  "Return the review purpose symbol for ACTION and REPO short name.
+Returns `bot-pr-review' for `ship', `ops-pr-review' for GitOps/infra manifest
+repos, and `pr-review' for service code PRs."
+  (cond
+   ((eq action 'ship) 'bot-pr-review)
+   ((decknix-auto-review-ops-repo-p repo) 'ops-pr-review)
+   (t 'pr-review)))
+
 (defun decknix-auto-review--dispatch-unit (unit)
   "Launch one session for UNIT, an (ACTION REPO AUTHOR ITEMS) tuple.
 
@@ -492,7 +515,7 @@ nil otherwise."
          (numbers (mapcar (lambda (i) (alist-get 'number i)) items))
          (resolution (decknix-auto-review--resolve owner repo))
          (workspace (plist-get resolution :workspace))
-         (purpose (if (eq action 'ship) 'bot-pr-review 'pr-review))
+         (purpose (decknix-auto-review-unit-purpose action repo))
          (cfg (decknix-agent-purpose-resolve purpose))
          (command-base (if grouped
                            decknix-auto-review-group-ship-command

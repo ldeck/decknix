@@ -2963,15 +2963,18 @@ workspace = project root, no tags; name is still derived automatically."
          ;; the broker-attach wrapper under a fresh key (persisted at first
          ;; message so resume reattaches the same broker).  nil key -> no wrap.
          (broker-key (decknix--agent-broker-key-for-new provider))
+         ;; Seed the session/permission mode and default model from the
+         ;; `new-session' purpose so user-created sessions start on the
+         ;; configured workhorse tier and mode without manual `C-c C-v' /
+         ;; `C-c RET' each time.
+         (purpose-cfg (decknix-agent-purpose-resolve 'new-session))
+         (mode (plist-get purpose-cfg :mode))
+         (model (and (eq provider (plist-get purpose-cfg :provider))
+                     (plist-get purpose-cfg :model)))
          (augmented-cmd (decknix--agent-broker-wrap-command
-                         (decknix--agent-command-build provider workspace)
+                         (decknix--agent-command-build provider workspace nil model)
                          broker-key))
-         ;; Seed the session/permission mode from the `new-session'
-         ;; purpose (e.g. Claude "auto") so user-created sessions no
-         ;; longer need a manual `C-c RET' each time.  Ignored by
-         ;; providers without session modes (see `decknix--agent-make-config').
-         (mode (plist-get (decknix-agent-purpose-resolve 'new-session) :mode))
-         (config (decknix--agent-make-config provider augmented-cmd mode)))
+         (config (decknix--agent-make-config provider augmented-cmd mode model)))
     ;; Set default-directory so agent-shell-cwd picks up the chosen
     ;; workspace instead of inheriting the calling buffer's directory
     ;; (which may be ~/ when invoked from the welcome screen).
@@ -2981,7 +2984,7 @@ workspace = project root, no tags; name is still derived automatically."
     (setq decknix--agent-session-cache-time 0)
     ;; Post-creation: rename buffer immediately, subscribe to prompt-ready for metadata
     (decknix--agent-session-new-post-create
-     before-buffers name tags workspace nil provider broker-key)
+     before-buffers name tags workspace model provider broker-key)
     (message "Starting agent session \"%s\" in %s…" name workspace)))
 
 (defun decknix-agent-session-fork ()

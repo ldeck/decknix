@@ -73,7 +73,14 @@ in {
     home.activation.pi-settings = mkIf (cfg.settings != {})
       (lib.hm.dag.entryAfter [ "writeBoundary" ] ''
         PI_SETTINGS="$HOME/.pi/agent/settings.json"
+        PI_STAMP="$HOME/.pi/agent/.nix-pi-version"
+        PI_MODELS_STORE="$HOME/.pi/agent/models-store.json"
+        PI_VER=${escapeShellArg pkgs.unstable.pi-coding-agent.version}
         ${pkgs.coreutils}/bin/mkdir -p "$(${pkgs.coreutils}/bin/dirname "$PI_SETTINGS")"
+        if [ "$(${pkgs.coreutils}/bin/cat "$PI_STAMP" 2>/dev/null || true)" != "$PI_VER" ]; then
+          $DRY_RUN_CMD ${pkgs.coreutils}/bin/rm -f "$PI_MODELS_STORE"
+          $DRY_RUN_CMD printf '%s\n' "$PI_VER" > "$PI_STAMP"
+        fi
         [ -f "$PI_SETTINGS" ] || echo '{}' > "$PI_SETTINGS"
         TMP="$(${pkgs.coreutils}/bin/mktemp)"
         if ${pkgs.jq}/bin/jq --argjson seed ${escapeShellArg (builtins.toJSON cfg.settings)} \

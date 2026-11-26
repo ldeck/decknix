@@ -228,6 +228,32 @@
   (should-not (decknix-agent-purpose--known-model-p 'claude-code "opus-1m"))
   (should-not (decknix-agent-purpose--known-model-p 'claude-code "bogus")))
 
+(ert-deftest decknix-purpose-engine--resolve-by-name-and-alias ()
+  "Engine rooms resolve by canonical name and by cylinder/tier alias."
+  (should (equal '(:engine flagship :provider claude-code :model "claude-opus-5-5" :mode "bypassPermissions")
+                 (decknix-agent-engine-resolve "v12" t)))
+  (should (equal '(:engine workhorse :provider claude-code :model "claude-sonnet-5-5" :mode "bypassPermissions")
+                 (decknix-agent-engine-resolve 'workhorse t)))
+  (should (equal '(:engine vertex :provider pi :model "google-vertex/gemini-4-argon:high" :mode nil)
+                 (decknix-agent-engine-resolve "argon" t)))
+  (should (equal '(:engine codex :provider pi :model "openai-codex/gpt-6.2-sol" :mode nil)
+                 (decknix-agent-engine-resolve "v10-codex" t)))
+  (should (equal "workhorse"
+                 (decknix-agent-engine-for-model 'claude-code "claude-sonnet-5-5")))
+  (should-not (decknix-agent-engine-resolve "nonexistent-engine" t)))
+
+(ert-deftest decknix-purpose-quota--steps-down-and-fails-over ()
+  "Quota policy steps Opus down at >=80% and fails over to Pi Vertex when exhausted."
+  (decknix-purpose-test--with-registry
+   (let ((opus-cfg '(:provider claude-code :model "claude-opus-5-5" :mode "auto")))
+     (should (equal "claude-sonnet-5-5"
+                    (plist-get (decknix-agent-purpose-apply-quota-policy
+                                opus-cfg '(:limit-reached nil :week-percent 85.0))
+                               :model)))
+     (should (equal '(:provider pi :model "google-vertex/gemini-4-argon:high" :mode nil)
+                    (decknix-agent-purpose-apply-quota-policy
+                     opus-cfg '(:limit-reached t :week-percent 100.0)))))))
+
 
 (provide 'decknix-agent-purposes-test)
 ;;; decknix-agent-purposes-test.el ends here

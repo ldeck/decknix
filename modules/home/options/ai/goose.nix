@@ -26,7 +26,7 @@ in {
 
   config = mkIf cfg.enable {
     # goose-cli provides the `goose' binary and speaks ACP via `goose acp'.
-    home.packages = [ pkgs.goose-cli ];
+    home.packages = [ pkgs.unstable.goose-cli ];
 
     decknix.cli.agentSync.enable = true;
     decknix.cli.agentSync.files = mkIf (cfg.settings != {}) {

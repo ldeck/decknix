@@ -257,6 +257,13 @@ pub fn summary_line(v: &Value) -> String {
     if !tool.is_empty() {
         s.push_str(&format!("  tool: {}", tool));
     }
+    let model = str_of(v, "model");
+    let engine = str_of(v, "engine");
+    if !engine.is_empty() && !model.is_empty() {
+        s.push_str(&format!("  {}:{}", engine, model));
+    } else if !model.is_empty() {
+        s.push_str(&format!("  model:{}", model));
+    }
     let tags = tags_of(v);
     if !tags.is_empty() {
         s.push_str(&format!("  [{}]", tags.join(",")));
@@ -268,6 +275,17 @@ pub fn detail(v: &Value) -> String {
     let mut out = vec![
         format!("session   {}", str_of(v, "id")),
         format!("buffer    {}", str_of(v, "buffer")),
+    ];
+    let model = str_of(v, "model");
+    let engine = str_of(v, "engine");
+    if !model.is_empty() {
+        if !engine.is_empty() {
+            out.push(format!("model     {} (engine: {})", model, engine));
+        } else {
+            out.push(format!("model     {}", model));
+        }
+    }
+    out.extend([
         format!(
             "state     {}{} for {}",
             str_of(v, "state"),
@@ -276,7 +294,7 @@ pub fn detail(v: &Value) -> String {
         ),
         format!("busy      {}", if v.get("busy").and_then(Value::as_bool).unwrap_or(false) { format!("yes, for {}", ago(opt_i64(v, "busy_for"))) } else { "no".into() }),
         format!("activity  last output {} ago", ago(opt_i64(v, "quiet_for"))),
-    ];
+    ]);
     if let Some(t) = v.get("tool").filter(|t| !t.is_null()) {
         out.push(format!("tool      {} ({} in flight)", str_of(t, "name"), v.get("tools_in_flight").and_then(Value::as_i64).unwrap_or(0)));
     }
@@ -356,8 +374,9 @@ pub fn cmd_list_live(tags: &[String], json_out: bool) -> Result<i32> {
 // Sending
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum When {
+    #[default]
     Idle,
     Now,
     Interrupt,
@@ -381,6 +400,7 @@ impl When {
     }
 }
 
+#[derive(Clone, Debug, Default)]
 pub struct SendSpec {
     pub session_id: String,
     pub prompt: String,
@@ -389,6 +409,7 @@ pub struct SendSpec {
     pub from: Option<String>,
     pub from_name: Option<String>,
     pub reason: Option<String>,
+    pub model: Option<String>,
     pub notify: bool,
 }
 
@@ -447,6 +468,9 @@ pub fn build_request(id: &str, spec: &SendSpec, now: i64) -> Result<Value> {
     }
     if let Some(r) = &spec.reason {
         o.insert("reason".into(), json!(r.trim()));
+    }
+    if let Some(m) = spec.model.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        o.insert("model".into(), json!(m));
     }
     Ok(req)
 }
@@ -555,12 +579,18 @@ pub fn cmd_send(
     ttl: Option<String>,
     from: Option<String>,
     reason: Option<String>,
+    engine: Option<String>,
+    model: Option<String>,
     notify: bool,
     wait_receipt: Option<u64>,
     force: bool,
     json_out: bool,
 ) -> Result<i32> {
     let when = When::parse(when)?;
+    let resolved_engine = match engine.as_deref() {
+        Some(e) => Some(crate::session_lifecycle::resolve_engine(e)?),
+        None => None,
+    };
     let prompt = read_message(message, message_file, stdin)?;
     check_prompt(&prompt)?;
     if when == When::Interrupt && reason.as_deref().map(str::trim).unwrap_or("").is_empty() {
@@ -616,7 +646,11 @@ pub fn cmd_send(
         (None, When::Interrupt) => 3600,
         (None, When::Idle) => 86400,
     };
-    let spec = SendSpec { session_id: session_id.clone(), prompt, when, ttl, from, from_name, reason, notify };
+    let lane_agent = lane.map(|v| str_of(v, "agent")).filter(|s| !s.is_empty());
+    let model = model.or_else(|| {
+        resolved_engine.map(|e| crate::session_lifecycle::resolve_engine_model_for_agent(e, lane_agent).to_string())
+    });
+    let spec = SendSpec { session_id: session_id.clone(), prompt, when, ttl, from, from_name, reason, model, notify };
     let id = session::new_uuid_v4()?;
     let req = build_request(&id, &spec, now)?;
     publish_request(&dirs.dispatch, &req)?;
@@ -912,6 +946,7 @@ mod tests {
             from: Some(COORD.into()),
             from_name: Some("coord".into()),
             reason: reason.map(str::to_string),
+            model: None,
             notify: true,
         }
     }

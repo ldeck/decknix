@@ -9,13 +9,13 @@
 
 let
   pname = "claude-agent-acp";
-  version = "0.94.0";
+  version = "0.112.0";
 
   src = fetchFromGitHub {
     owner = "agentclientprotocol";
     repo = "claude-agent-acp";
     rev = "v${version}";
-    hash = "sha256-LLTICKYdcdIhKmXgsjZvY/fTW+9WwWZQYjzKZuSnQho=";
+    hash = "sha256-S/toP7bPWY0UraUWvMpZnmQzDavxmCOcHq4tPbIDS6w=";
   };
 
   package = lib.importJSON "${src}/package.json";

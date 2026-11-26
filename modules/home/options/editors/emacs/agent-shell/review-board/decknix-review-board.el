@@ -1783,6 +1783,69 @@ poll where no PR moved."
                                              (plist-get row :rereview)))))))
                     rows)))
 
+(defcustom decknix-review-board-reap-enable t
+  "When non-nil, quit idle auto-review sessions whose PR is obsolete or posted.
+Stops their brokers and kills their buffers once they have been quiet for
+`decknix-review-board-reap-obsolete-after' (merged/closed PRs) or
+`decknix-review-board-reap-posted-after' (review posted on GitHub).
+Their saved conversation records stay on disk, so a future push resumes them."
+  :type 'boolean
+  :group 'decknix-review-board)
+
+(defcustom decknix-review-board-reap-obsolete-after 1800
+  "Quiet seconds before an idle auto-review session on an obsolete PR is quit."
+  :type 'integer
+  :group 'decknix-review-board)
+
+(defcustom decknix-review-board-reap-posted-after 7200
+  "Quiet seconds before an idle auto-review session that posted its review is quit."
+  :type 'integer
+  :group 'decknix-review-board)
+
+(defun decknix-review-board-reapable-rows (model now &optional obsolete-after posted-after)
+  "Return rows in MODEL whose sessions are eligible for idle reaping at NOW.  Pure."
+  (let ((obs-thresh (or obsolete-after decknix-review-board-reap-obsolete-after))
+        (post-thresh (or posted-after decknix-review-board-reap-posted-after))
+        (out nil))
+    (dolist (pair (list (cons 'obsolete obs-thresh)
+                        (cons 'posted post-thresh)))
+      (let ((lane (car pair))
+            (thresh (cdr pair)))
+        (dolist (row (alist-get lane model))
+          (let ((state (plist-get row :state))
+                (since (plist-get row :since)))
+            (when (and (plist-get row :buffer)
+                       (member state '("ready" "finished" "idle"))
+                       (null (plist-get row :ask))
+                       (numberp since)
+                       (>= (- now since) thresh))
+              (push row out))))))
+    (nreverse out)))
+
+(defun decknix-review-board-reap-idle-sessions (&optional now)
+  "Quit idle auto-review buffers that have exceeded their retention window."
+  (when (and decknix-review-board-reap-enable
+             (fboundp 'decknix-session-lifecycle-quit))
+    (let* ((now (or now (float-time)))
+           (model (decknix-review-board--build))
+           (rows (decknix-review-board-reapable-rows model now))
+           (doomed
+            (delq nil
+                  (mapcar
+                   (lambda (row)
+                     (let ((buf (plist-get row :buffer)))
+                       (when (and (buffer-live-p buf)
+                                  (null (get-buffer-window buf t))
+                                  (member "auto" (ignore-errors
+                                                   (decknix--agent-tags-for-buffer buf))))
+                         buf)))
+                   rows))))
+      (when doomed
+        (when-let ((n (decknix-session-lifecycle-quit doomed t)))
+          (message "Review Board: reaped %d idle auto-review session%s"
+                   n (if (= n 1) "" "s"))
+          n)))))
+
 (defun decknix-review-board-rereview-tick (&rest _)
   "Act on PRs updated since their review, after each reviews-feed refresh.
 
@@ -1797,7 +1860,8 @@ the board closed."
           (decknix-attention-set-flags (decknix-review-board--rereview-flags rows)))
         (decknix-review-board-rereview-process
          rows decknix-review-board-auto-rereview
-         #'decknix-review-board--rereview-start-row))
+         #'decknix-review-board--rereview-start-row)
+        (ignore-errors (decknix-review-board-reap-idle-sessions)))
     (error (message "Review Board re-review check failed: %s"
                     (error-message-string err)))))
 

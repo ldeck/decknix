@@ -1195,13 +1195,16 @@ With CHOOSE-PROVIDER (prefix argument), pick the provider."
          (provider (if (and choose-provider (fboundp 'decknix-agent-provider-select))
                        (decknix-agent-provider-select)
                      (bound-and-true-p decknix-agent-default-provider)))
-         (mode (and (fboundp 'decknix-agent-purpose-resolve)
-                    (plist-get (decknix-agent-purpose-resolve 'new-session) :mode))))
+         (purpose-cfg (and (fboundp 'decknix-agent-purpose-resolve)
+                           (decknix-agent-purpose-resolve 'new-session)))
+         (mode (plist-get purpose-cfg :mode))
+         (model (and (eq provider (plist-get purpose-cfg :provider))
+                     (plist-get purpose-cfg :model))))
     (unless (fboundp 'decknix--agent-quickaction-start)
       (user-error "Agent sessions are not loaded"))
     (decknix--agent-quickaction-start (string-join tags "/") tags
                                       (expand-file-name workspace) brief
-                                      nil provider mode)))
+                                      model provider mode)))
 
 (defun decknix-board-broadcast (&optional whole-board)
   "Compose one message to the item's sessions, or all board sessions.

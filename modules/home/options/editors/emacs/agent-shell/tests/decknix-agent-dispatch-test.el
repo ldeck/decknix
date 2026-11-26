@@ -1479,5 +1479,16 @@ Return (REASON . CHECKED), CHECKED non-nil when the drift was measured."
       (decknix-agent-dispatch-mode -1)
       (delete-directory root t))))
 
+(ert-deftest decknix-agent-dispatch/overflow-lane-reaper-keeps-warm-pool ()
+  (let ((lanes (list '(:buffer b1 :lane-num 1 :idle-since 100 :busy nil :unsent nil :visible nil :queued 0 :protected nil)
+                     '(:buffer b2 :lane-num 2 :idle-since 100 :busy nil :unsent nil :visible nil :queued 0 :protected nil)
+                     '(:buffer b9 :lane-num 9 :idle-since 100 :busy nil :unsent nil :visible nil :queued 0 :protected nil)
+                     '(:buffer b10 :lane-num 10 :idle-since 100 :busy t :unsent nil :visible nil :queued 0 :protected nil)
+                     '(:buffer b11 :lane-num 11 :idle-since 100 :busy nil :unsent nil :visible nil :queued 0 :protected nil))))
+    (should-not (decknix-agent-dispatch-select-overflow-lanes lanes 8 2700 5000))
+    (should (equal '(b11 b9)
+                   (decknix-agent-dispatch-select-overflow-lanes lanes 3 2700 5000)))
+    (should-not (decknix-agent-dispatch-select-overflow-lanes lanes 3 2700 1000))))
+
 (provide 'decknix-agent-dispatch-test)
 ;;; decknix-agent-dispatch-test.el ends here

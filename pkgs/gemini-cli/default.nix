@@ -10,11 +10,11 @@
 { gemini-cli-bin, fetchzip }:
 
 gemini-cli-bin.overrideAttrs (_: rec {
-  version = "0.64.0";
+  version = "0.71.1";
 
   src = fetchzip {
     url = "https://github.com/google-gemini/gemini-cli/releases/download/v${version}/gemini-cli-bundle.zip";
-    hash = "sha256-4xBGPuIIryOJLBLVlZWLsVmHnJWCsLQVXeSL17ATFQE=";
+    hash = "sha256-yxmc1dijTpg2ovDwdSmIufaC359PwJ8sVVVm5Kb9QoM=";
     stripRoot = false;
   };
 })
