@@ -1507,6 +1507,24 @@ unknown conflict."
 (defvar decknix--hub-pr-cache-file)
 (defvar decknix--hub-pr-pending-fetches)
 
+(defvar decknix--hub-pr-refresh-timer nil
+  "Timer for coalesced sidebar refresh after PR status fetches.")
+
+(defun decknix--hub-pr-refresh-timer-fire ()
+  "Run the coalesced sidebar refresh after async PR/repo/worktree fetches."
+  (setq decknix--hub-pr-refresh-timer nil)
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
+    (ignore-errors
+      (agent-shell-workspace-sidebar-refresh))))
+
+(defun decknix--hub-schedule-pr-refresh ()
+  "Coalesce sidebar refresh onto a named 0.3s idle timer."
+  (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
+    (when (timerp decknix--hub-pr-refresh-timer)
+      (cancel-timer decknix--hub-pr-refresh-timer))
+    (setq decknix--hub-pr-refresh-timer
+          (run-with-idle-timer 0.3 nil #'decknix--hub-pr-refresh-timer-fire))))
+
 (defun decknix--hub-pr-fetch-async (url)
   "Fetch PR status for URL via `gh pr view' asynchronously.
 Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
@@ -1610,25 +1628,13 @@ Populates `decknix--hub-pr-cache' and refreshes the sidebar on completion."
                               ;; the new one replaces it, so only the last fires.
                               ;; idle-timer: fires only when the user is not
                               ;; typing so fetch completions never block input.
-                              (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
-                                (when (timerp decknix--hub-pr-refresh-timer)
-                                  (cancel-timer decknix--hub-pr-refresh-timer))
-                                (setq decknix--hub-pr-refresh-timer
-                                      (run-with-idle-timer 0.3 nil
-                                        (lambda ()
-                                          (setq decknix--hub-pr-refresh-timer nil)
-                                          (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
-                                            (ignore-errors
-                                              (agent-shell-workspace-sidebar-refresh))))))))))
+                              (decknix--hub-schedule-pr-refresh))))
                        t)))
             (error
              ;; Process creation failed — clear pending flag
              (remhash url decknix--hub-pr-pending-fetches)
              (message "hub-pr-fetch: process error for %s: %s"
                       url (error-message-string err)))))))))
-
-(defvar decknix--hub-pr-refresh-timer nil
-  "Timer for coalesced sidebar refresh after PR status fetches.")
 
 ;; -- Repo HEAD status fetch (on-demand) --
 ;;
@@ -1769,16 +1775,7 @@ large bodies is expensive under dynamic binding."
     ;; Coalesced refresh — shared with the PR-fetch timer so a
     ;; burst of PR+repo fetches collapses to a single redraw.
     ;; idle-timer: fires only when the user is not typing.
-    (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
-      (when (timerp decknix--hub-pr-refresh-timer)
-        (cancel-timer decknix--hub-pr-refresh-timer))
-      (setq decknix--hub-pr-refresh-timer
-            (run-with-idle-timer 0.3 nil
-              (lambda ()
-                (setq decknix--hub-pr-refresh-timer nil)
-                (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
-                  (ignore-errors
-                    (agent-shell-workspace-sidebar-refresh)))))))))
+    (decknix--hub-schedule-pr-refresh)))
 
 (defun decknix--hub-repo-fetch-async (url branch)
   "Fetch HEAD commit + combined CI state for URL+BRANCH asynchronously.
@@ -2260,16 +2257,7 @@ dynamic binding is expensive for large bodies — same reasoning as
       (kill-buffer (process-buffer proc)))
     ;; Coalesced sidebar refresh (shares the PR-fetch timer).
     ;; idle-timer: fires only when the user is not typing.
-    (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
-      (when (timerp decknix--hub-pr-refresh-timer)
-        (cancel-timer decknix--hub-pr-refresh-timer))
-      (setq decknix--hub-pr-refresh-timer
-            (run-with-idle-timer 0.3 nil
-              (lambda ()
-                (setq decknix--hub-pr-refresh-timer nil)
-                (when (get-buffer agent-shell-workspace-sidebar-buffer-name)
-                  (ignore-errors
-                    (agent-shell-workspace-sidebar-refresh)))))))))
+    (decknix--hub-schedule-pr-refresh)))
 
 (defun decknix-hub-worktree-registry-refresh (&optional repo)
   "Force re-probe REPO (or every discovered clone if nil).

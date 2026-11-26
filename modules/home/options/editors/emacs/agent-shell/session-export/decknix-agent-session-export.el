@@ -348,10 +348,19 @@ lookup per sweep."
 (defun decknix-agent-session-export--file (name)
   (expand-file-name name decknix-agent-session-export-dir))
 
+(defvar decknix-agent-session-export--dir-ensured nil
+  "Directory path whose mode has already been set to 0700.")
+
 (defun decknix-agent-session-export--ensure-dir ()
-  (unless (file-directory-p decknix-agent-session-export-dir)
-    (make-directory decknix-agent-session-export-dir t))
-  (set-file-modes decknix-agent-session-export-dir #o700))
+  (let ((file-name-handler-alist nil))
+    (unless (and (equal decknix-agent-session-export--dir-ensured
+                        decknix-agent-session-export-dir)
+                 (file-directory-p decknix-agent-session-export-dir))
+      (unless (file-directory-p decknix-agent-session-export-dir)
+        (make-directory decknix-agent-session-export-dir t))
+      (set-file-modes decknix-agent-session-export-dir #o700)
+      (setq decknix-agent-session-export--dir-ensured
+            decknix-agent-session-export-dir))))
 
 (defun decknix-agent-session-export--write (name plist &optional force)
   (with-file-modes #o600
@@ -403,8 +412,9 @@ is off."
             (condition-case err
                 (let ((snap (decknix-agent-session-export-snapshot buf sid now)))
                   (push sid live)
-                  (decknix-agent-session-export--write (concat sid ".json") snap)
-                  (puthash sid snap decknix-agent-session-export--written))
+                  (unless (equal snap (gethash sid decknix-agent-session-export--written))
+                    (decknix-agent-session-export--write (concat sid ".json") snap)
+                    (puthash sid snap decknix-agent-session-export--written)))
               (error (message "decknix-agent-session-export: %s: %s"
                               (buffer-name buf) (error-message-string err))))))))
     (maphash (lambda (sid snap)

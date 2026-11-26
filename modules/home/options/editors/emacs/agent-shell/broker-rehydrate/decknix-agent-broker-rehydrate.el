@@ -585,13 +585,14 @@ log tail -- is cached, and on the file\='s own identity."
     (when-let* (((bound-and-true-p decknix--agent-broker-key))
                 (key decknix--agent-broker-key)
                 (log (decknix--agent-broker-log-path key))
-                (attrs (file-attributes log)))
-      (and (decknix--agent-broker-live-p key)
-           ;; Cheap and clock-dependent, so computed from the stat we
-           ;; already have rather than re-stat'ing inside a helper.
-           (< (- (float-time (current-time))
+                (attrs (decknix--agent-broker-without-file-hooks
+                         (file-attributes log))))
+      ;; Check mtime freshness from ATTRS before probing the pidfile so
+      ;; a dormant session costs one stat instead of two plus a signal.
+      (and (< (- (float-time (current-time))
                  (float-time (file-attribute-modification-time attrs)))
               decknix-agent-broker-inflight-stale-seconds)
+           (decknix--agent-broker-live-p key)
            (decknix--agent-broker-inflight-cached-p key attrs)))))
 
 (defun decknix--agent-broker-can-restore-p (&optional buffer)

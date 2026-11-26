@@ -7809,14 +7809,15 @@ duration -- the most important number on this branch."
         ;; peg CPU with N redundant file writes.
         (defvar decknix--sidebar-state-save-timer nil
           "Idle timer that periodically persists sidebar + previous-session state.")
+        (defun decknix--sidebar-idle-persist-state ()
+          "Persist sidebar, previous-session and history state when changed."
+          (decknix--sidebar-state-write--flush)
+          (decknix--sidebar-previous-sessions-save)
+          (decknix--sidebar-previous-history-save))
         (when (timerp decknix--sidebar-state-save-timer)
           (cancel-timer decknix--sidebar-state-save-timer))
         (setq decknix--sidebar-state-save-timer
-              (run-with-idle-timer 30 t
-                (lambda ()
-                  (decknix--sidebar-state-save)
-                  (decknix--sidebar-previous-sessions-save)
-                  (decknix--sidebar-previous-history-save))))
+              (run-with-idle-timer 30 t #'decknix--sidebar-idle-persist-state))
 
         ;; Bind 'P' to restore all previous sessions
         (define-key agent-shell-workspace-sidebar-mode-map

@@ -48,9 +48,29 @@ work is not recorded."
   :type 'integer
   :group 'decknix-perf-hitch)
 
+(defcustom decknix-perf-hitch-sleep-wall-ms 30000
+  "Wall-clock duration (ms) above which a timer/command is checked for OS sleep."
+  :type 'integer
+  :group 'decknix-perf-hitch)
+
+(defcustom decknix-perf-hitch-sleep-max-cpu-ms 2000
+  "Maximum CPU run-time (ms) for a long wall-clock jump to count as OS sleep."
+  :type 'integer
+  :group 'decknix-perf-hitch)
+
 (defvar decknix--perf-hitch-cmd-start nil)
+(defvar decknix--perf-hitch-cmd-cpu-start nil)
 (defvar decknix--perf-hitch-active nil
   "Non-nil while the profiler's advice/hooks are installed.")
+
+(defun decknix--perf-hitch-sleep-jump-p (wall-ms cpu-ms)
+  "Return non-nil when WALL-MS is an OS sleep jump rather than an Emacs hitch.
+A timer or command on the stack across macOS lid-close sleep sees wall-clock
+jump by minutes while Emacs consumed almost no CPU time (`get-internal-run-time').
+Pure."
+  (and (>= wall-ms decknix-perf-hitch-sleep-wall-ms)
+       (numberp cpu-ms)
+       (< cpu-ms decknix-perf-hitch-sleep-max-cpu-ms)))
 
 (defun decknix--perf-hitch-fn-label (fn)
   "Return a compact, SAFE label for FN (never serialises a closure).
@@ -77,10 +97,13 @@ a closure capturing large state cannot produce a multi-KB log line."
 
 (defun decknix--perf-hitch-timer-advice (orig &rest args)
   "Around-advice for `timer-event-handler' that logs slow timers."
-  (let ((t0 (float-time)))
+  (let ((t0 (float-time))
+        (cpu0 (get-internal-run-time)))
     (unwind-protect (apply orig args)
-      (let ((ms (* 1000 (- (float-time) t0))))
-        (when (>= ms (* 1000 decknix-perf-hitch-threshold))
+      (let ((ms (* 1000 (- (float-time) t0)))
+            (cpu-ms (* 1000 (float-time (time-subtract (get-internal-run-time) cpu0)))))
+        (when (and (>= ms (* 1000 decknix-perf-hitch-threshold))
+                   (not (decknix--perf-hitch-sleep-jump-p ms cpu-ms)))
           (decknix--perf-hitch-log
            (format "TIMER %s"
                    (decknix--perf-hitch-fn-label
@@ -88,12 +111,18 @@ a closure capturing large state cannot produce a multi-KB log line."
            ms))))))
 
 (defun decknix--perf-hitch-pre ()
-  (setq decknix--perf-hitch-cmd-start (float-time)))
+  (setq decknix--perf-hitch-cmd-start (float-time)
+        decknix--perf-hitch-cmd-cpu-start (get-internal-run-time)))
 
 (defun decknix--perf-hitch-post ()
-  (when decknix--perf-hitch-cmd-start
-    (let ((ms (* 1000 (- (float-time) decknix--perf-hitch-cmd-start))))
-      (when (>= ms (* 1000 decknix-perf-hitch-threshold))
+  (when (and decknix--perf-hitch-cmd-start this-command)
+    (let ((ms (* 1000 (- (float-time) decknix--perf-hitch-cmd-start)))
+          (cpu-ms (and decknix--perf-hitch-cmd-cpu-start
+                       (* 1000 (float-time
+                                (time-subtract (get-internal-run-time)
+                                               decknix--perf-hitch-cmd-cpu-start))))))
+      (when (and (>= ms (* 1000 decknix-perf-hitch-threshold))
+                 (not (decknix--perf-hitch-sleep-jump-p ms cpu-ms)))
         (decknix--perf-hitch-log
          (format "CMD %s" (decknix--perf-hitch-fn-label this-command)) ms)))))
 

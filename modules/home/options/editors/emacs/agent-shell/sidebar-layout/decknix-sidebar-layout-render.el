@@ -1937,14 +1937,16 @@ when neither the target nor the overlay has moved.  Nothing is rendered."
                                                    (min (point-max) (1+ (line-end-position)))))
               (overlay-put ov 'decknix-target target))))))))
 
+(defun decknix--layout-active-timer-fire ()
+  "Run the coalesced active-row highlight refresh."
+  (setq decknix--layout-active-timer nil)
+  (decknix-layout-highlight-active))
+
 (defun decknix--layout-active-schedule (&rest _)
   "Update the highlight shortly, once however many changes arrive."
   (unless (timerp decknix--layout-active-timer)
     (setq decknix--layout-active-timer
-          (run-with-timer 0.05 nil
-                          (lambda ()
-                            (setq decknix--layout-active-timer nil)
-                            (decknix-layout-highlight-active))))))
+          (run-with-timer 0.05 nil #'decknix--layout-active-timer-fire))))
 
 (defun decknix--layout-active-after-render (&rest _)
   "Re-mark the active row after a paint, which erases the sidebar."

@@ -680,10 +680,13 @@ Refines ORIG-FN's status for BUFFER when that session's last turn ended
 on a question.  Never invents urgency for a live, blocked or dead
 session -- see `decknix-agent-turn-status'."
   (let ((raw (funcall orig-fn buffer)))
-    (if (buffer-live-p buffer)
-        (decknix-agent-turn-status
-         raw (append (decknix-agent-turn-broker-facts buffer)
-                     (decknix-agent-turn-facts buffer)))
+    (if (and (buffer-live-p buffer)
+             (member raw decknix-agent-turn-askable-statuses))
+        (let ((facts (decknix-agent-turn-facts buffer)))
+          (decknix-agent-turn-status
+           raw (if (plist-get facts :ended)
+                   facts
+                 (append (decknix-agent-turn-broker-facts buffer) facts))))
       raw)))
 
 ;; ---------------------------------------------------------------------------

@@ -44,5 +44,13 @@
             (should (equal (cdr tmr) (list 1 21032 21032)))))
       (kill-buffer buf))))
 
+(ert-deftest decknix-perf-hitch--sleep-jump-detection ()
+  "A multi-minute wall-clock jump with minimal CPU time is classified as OS sleep."
+  (let ((decknix-perf-hitch-sleep-wall-ms 30000)
+        (decknix-perf-hitch-sleep-max-cpu-ms 2000))
+    (should (decknix--perf-hitch-sleep-jump-p 900000 15))
+    (should-not (decknix--perf-hitch-sleep-jump-p 1500 15))
+    (should-not (decknix--perf-hitch-sleep-jump-p 45000 35000))))
+
 (provide 'decknix-perf-hitch-test)
 ;;; decknix-perf-hitch-test.el ends here

@@ -304,13 +304,14 @@ statuses -- the two things the blind 2 s timer existed to catch.  A few
 ~100ms paint it guards."
   (list
    (when (and (boundp 'decknix--hub-dir) decknix--hub-dir)
-     (mapcar (lambda (f)
-               (let ((attrs (file-attributes
-                             (expand-file-name f decknix--hub-dir))))
-                 (when attrs
-                   (list f (file-attribute-modification-time attrs)
-                         (file-attribute-size attrs)))))
-             decknix--sidebar-idle-hub-files))
+     (let ((file-name-handler-alist nil))
+       (mapcar (lambda (f)
+                 (let ((attrs (file-attributes
+                               (expand-file-name f decknix--hub-dir))))
+                   (when attrs
+                     (list f (file-attribute-modification-time attrs)
+                           (file-attribute-size attrs)))))
+               decknix--sidebar-idle-hub-files)))
    (when (and (fboundp 'agent-shell-buffers)
               (fboundp 'agent-shell-workspace--buffer-status))
      (mapcar (lambda (b)
