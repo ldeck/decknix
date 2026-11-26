@@ -7182,10 +7182,12 @@ duration -- the most important number on this branch."
               (setq line-num
                     (decknix--sidebar-render-top-sections
                      line-num
-                     (max 24 (1- (let ((win (get-buffer-window (current-buffer))))
-                                   (if (window-live-p win)
-                                       (window-max-chars-per-line win)
-                                     (window-width)))))
+                     (max 24 (1- (if (fboundp 'decknix--layout-sidebar-width)
+                                     (decknix--layout-sidebar-width)
+                                   (let ((win (get-buffer-window (current-buffer) t)))
+                                     (if (window-live-p win)
+                                         (window-max-chars-per-line win)
+                                       48)))))
                      #'decknix--sidebar-render-checkpoint))
 
               ;; ── Reviews (collapsed by repo) then WIP (my sessions) ──

@@ -230,17 +230,25 @@ screen.  The number held back is always reported.")
       (agent-shell-workspace-sidebar-refresh))
     (message "Unattended items shown: %s" (or next "all"))))
 
+(defvar decknix--layout-last-sidebar-width nil
+  "Last observed character width of the sidebar window.")
+
 (defun decknix--layout-sidebar-width ()
-  "Return the width of the sidebar window, falling back to the selected one.
+  "Return the width of the sidebar window, falling back to the last known width or 48.
 
 Resolved from the buffer rather than from `window-width' with no argument:
 the render runs with whatever window is selected, so the bare call answered
 for the wrong one and padded every row to it."
-  (let ((win (get-buffer-window (current-buffer))))
+  (let ((win (or (get-buffer-window (current-buffer))
+                 (get-buffer-window (current-buffer) t))))
     ;; Not `window-width': that counts the line-number gutter, so with
     ;; `display-line-numbers' on every row ran four columns past the edge
     ;; and its right-hand status was the part cut off.
-    (if (window-live-p win) (window-max-chars-per-line win) (window-width))))
+    (if (window-live-p win)
+        (setq decknix--layout-last-sidebar-width (window-max-chars-per-line win))
+      (or decknix--layout-last-sidebar-width
+          (bound-and-true-p agent-shell-workspace-sidebar-width)
+          48))))
 
 (defun decknix-sidebar-layout-setup-buffer ()
   "Give the sidebar buffer its whole window width for rows.
@@ -1353,10 +1361,8 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
       (truncate-string-to-width name 4))))
 
 (defun decknix--layout-lane-badge (session)
-  "Return compact `[NN:v8]' or `[NN]' badge for lane SESSION."
-  (let ((code (decknix--layout-lane-short-code session))
-        (eng (decknix--layout-session-engine-badge session)))
-    (if eng (format "[%s:%s]" code eng) (format "[%s]" code))))
+  "Return compact `[NN]' badge for lane SESSION."
+  (format "[%s]" (decknix--layout-lane-short-code session)))
 
 (defun decknix--layout-prominent-lane-p (lane-row)
   "Return non-nil when LANE-ROW should render as its own prominent line."
@@ -1402,7 +1408,7 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
            (chunks (seq-partition (mapcar #'cdr pills) 8))
            (first t))
       (dolist (chunk chunks)
-        (let ((prefix (if first "    lanes: " "           "))
+        (let ((prefix (if first "   lanes: " "          "))
               (line-start (point)))
           (setq first nil)
           (insert (propertize prefix 'face 'font-lock-comment-face)
@@ -1414,8 +1420,9 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
           (setq line-num (1+ line-num))))))
   line-num)
 
-(defun decknix--layout-merge-team-claims (lanes)
-  "Consolidate repo claims across all LANES, tagging each PR/worktree with its lane badge."
+(defun decknix--layout-merge-team-claims (lanes &optional actionable-only)
+  "Consolidate repo claims across all LANES, tagging each PR/worktree with its lane badge.
+When ACTIONABLE-ONLY is non-nil, drop already-shipped PRs and clean worktrees."
   (let ((by-repo nil))
     (dolist (lane lanes)
       (let* ((lrow (car lane))
@@ -1426,16 +1433,25 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
           (unless (plist-get claim :duplicate)
             (let* ((repo (plist-get claim :repo))
                    (cell (assoc repo by-repo))
+                   (raw-prs (if actionable-only
+                                (seq-remove (lambda (pr) (eq (plist-get pr :visibility) 'shipped))
+                                            (plist-get claim :pr-items))
+                              (plist-get claim :pr-items)))
+                   (raw-wts (if actionable-only
+                                (seq-filter (lambda (wt)
+                                              (not (string-empty-p (decknix--layout-wt-markers wt))))
+                                            (plist-get claim :wt-items))
+                              (plist-get claim :wt-items)))
                    (pr-items (mapcar (lambda (pr)
                                        (let ((c (copy-sequence pr)))
                                          (plist-put c :lane-badge badge)
                                          (plist-put c :lane-session sess)))
-                                     (plist-get claim :pr-items)))
+                                     raw-prs))
                    (wt-items (mapcar (lambda (wt)
                                        (let ((c (copy-sequence wt)))
                                          (plist-put c :lane-badge badge)
                                          (plist-put c :lane-session sess)))
-                                     (plist-get claim :wt-items))))
+                                     raw-wts)))
               (if (null cell)
                   (push (cons repo (list :repo repo
                                          :codes (list code)
@@ -1454,21 +1470,22 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
                     (unless (seq-find (lambda (ew) (equal (plist-get ew :path) (plist-get w :path)))
                                       (plist-get cur :wt-items))
                       (plist-put cur :wt-items (append (plist-get cur :wt-items) (list w))))))))))))
-    (mapcar
-     (lambda (cell)
-       (let* ((c (cdr cell))
-              (prs (plist-get c :pr-items))
-              (wts (plist-get c :wt-items))
-              (codes (sort (copy-sequence (plist-get c :codes)) #'string<)))
-         (list :repo (format "%s [%s]" (plist-get c :repo) (string-join codes ","))
-               :raw-repo (plist-get c :repo)
-               :prs (length prs)
-               :worktrees (length wts)
-               :pr-items prs
-               :wt-items wts
-               :severity (decknix--layout-worst-severity prs wts)
-               :session (plist-get c :session))))
-     (nreverse by-repo))))
+    (delq nil
+          (mapcar
+           (lambda (cell)
+             (let* ((c (cdr cell))
+                    (prs (plist-get c :pr-items))
+                    (wts (plist-get c :wt-items)))
+               (when (or prs wts)
+                 (list :repo (plist-get c :repo)
+                       :raw-repo (plist-get c :repo)
+                       :prs (length prs)
+                       :worktrees (length wts)
+                       :pr-items prs
+                       :wt-items wts
+                       :severity (decknix--layout-worst-severity prs wts)
+                       :session (plist-get c :session)))))
+           (nreverse by-repo)))))
 
 (defun decknix--layout-render-team (line-num width team raw-keys)
   "Render a coordinator TEAM: its row, then its lanes nested.  Returns LINE-NUM.
@@ -1508,18 +1525,18 @@ collapsed team still lists any lane blocked on the user."
         (dolist (lane prominent)
           (let ((lstart (point)))
             (setq line-num (decknix--layout-render-wip-session
-                            line-num (- width 4)
+                            line-num (- width 2)
                             (if (eq decknix-sidebar-wip-detail-mode 'actionable)
                                 (plist-put (copy-sequence (car lane)) :repos nil)
                               (car lane))
                             nil coord-tags key))
-            (decknix--layout-indent-lines lstart (point) "    "
+            (decknix--layout-indent-lines lstart (point) "  "
                                           (if (eq (cdr lane) 'inferred)
-                                              (propertize "   ~" 'decknix-layout-guess 'inferred)
-                                            "    "))))
+                                              (propertize " ~" 'decknix-layout-guess 'inferred)
+                                            "  "))))
         (setq line-num (decknix--layout-render-lane-pills line-num idle key))
         (when (eq decknix-sidebar-wip-detail-mode 'actionable)
-          (dolist (tclaim (decknix--layout-merge-team-claims lanes))
+          (dolist (tclaim (decknix--layout-merge-team-claims lanes t))
             (setq line-num (decknix--layout-render-claim-1
                             line-num width tclaim (plist-get tclaim :session) 'observed))))))
      (t
@@ -1889,12 +1906,28 @@ PROVENANCE marks whether this association is evidence or a guess."
          (left (format "   %s⇡ %s"
                        (decknix--layout-provenance-mark provenance)
                        (plist-get claim :repo)))
-         (right (decknix--layout-count-label (plist-get claim :prs)
-                                             (plist-get claim :worktrees)))
-         (pad (max 1 (- width (string-width left) (string-width right))))
          (expand-key (concat "items:" (or (plist-get claim :repo) "")))
+         (filtered-claim
+          (if (and (eq decknix-sidebar-wip-detail-mode 'actionable)
+                   (not (decknix--layout-expanded-p expand-key)))
+              (let* ((uprs (seq-remove (lambda (pr) (eq (plist-get pr :visibility) 'shipped))
+                                       prs))
+                     (dwts (seq-filter (lambda (wt)
+                                         (not (string-empty-p (decknix--layout-wt-markers wt))))
+                                       wts))
+                     (c (copy-sequence claim)))
+                (when uprs
+                  (setq c (plist-put c :pr-items uprs))
+                  (setq c (plist-put c :prs (length uprs))))
+                (setq c (plist-put c :wt-items dwts))
+                (setq c (plist-put c :worktrees (length dwts)))
+                c)
+            claim))
+         (right (decknix--layout-count-label (plist-get filtered-claim :prs)
+                                             (plist-get filtered-claim :worktrees)))
+         (pad (max 1 (- width (string-width left) (string-width right))))
          (split (decknix--layout-claim-items
-                 claim decknix-sidebar-layout-items-per-repo
+                 filtered-claim decknix-sidebar-layout-items-per-repo
                  (decknix--layout-expanded-p expand-key)))
          (shown-prs (nth 0 split))
          (shown-wts (nth 1 split))
@@ -1977,7 +2010,9 @@ LINES are its ship lines when already computed.  Returns LINE-NUM."
              'decknix-hub-url (alist-get 'url (plist-get pr :pr)))
             "\n"))
   (setq line-num (1+ line-num))
-  (when (and decknix-sidebar-item-lines (not no-lines))
+  (when (and decknix-sidebar-item-lines
+             (not no-lines)
+             (not (eq decknix-sidebar-wip-detail-mode 'actionable)))
     (setq line-num (decknix--layout-insert-item-lines
                     line-num width (decknix--layout-pr-lines pr lines) "        "
                     'decknix-hub-url (alist-get 'url (plist-get pr :pr)))))

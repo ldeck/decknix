@@ -203,6 +203,12 @@ narrow sidebar row, not rendered."
                                    (string-match-p decknix--agent-question-line-regexp l))
                                  tail)))
                      (and choose (> choose 0) (nth (1- choose) tail))
+                     (car (last (seq-remove
+                                 (lambda (l)
+                                   (or (string-match-p "\\`reply with\\b" l)
+                                       (string-match-p "\\`choose one\\b" l)
+                                       (string-match-p "\\`[-=]+\\'" l)))
+                                 tail)))
                      (car (last tail)))))
       (and pick
            (string-trim
