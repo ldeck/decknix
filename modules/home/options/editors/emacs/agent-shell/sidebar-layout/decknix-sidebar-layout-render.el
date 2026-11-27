@@ -230,6 +230,11 @@ screen.  The number held back is always reported.")
       (agent-shell-workspace-sidebar-refresh))
     (message "Unattended items shown: %s" (or next "all"))))
 
+(defcustom decknix-sidebar-min-width 32
+  "Minimum column width used when rendering the sidebar."
+  :type 'integer
+  :group 'decknix)
+
 (defvar decknix--layout-last-sidebar-width nil
   "Last observed character width of the sidebar window.")
 
@@ -237,18 +242,21 @@ screen.  The number held back is always reported.")
   "Return the width of the sidebar window, falling back to the last known width or 48.
 
 Resolved from the buffer rather than from `window-width' with no argument:
-the render runs with whatever window is selected, so the bare call answered
-for the wrong one and padded every row to it."
+the render runs with whatever window is selected (and under diff-render inside
+the scratch buffer ` *decknix-sidebar-render*'), so we resolve the sidebar
+buffer's own window."
   (let ((win (or (get-buffer-window (current-buffer))
-                 (get-buffer-window (current-buffer) t))))
+                 (get-buffer-window (current-buffer) t)
+                 (and (boundp 'agent-shell-workspace-sidebar-buffer-name)
+                      (or (get-buffer-window agent-shell-workspace-sidebar-buffer-name)
+                          (get-buffer-window agent-shell-workspace-sidebar-buffer-name t))))))
     ;; Not `window-width': that counts the line-number gutter, so with
     ;; `display-line-numbers' on every row ran four columns past the edge
     ;; and its right-hand status was the part cut off.
-    (if (window-live-p win)
-        (setq decknix--layout-last-sidebar-width (window-max-chars-per-line win))
-      (or decknix--layout-last-sidebar-width
-          (bound-and-true-p agent-shell-workspace-sidebar-width)
-          48))))
+    (max decknix-sidebar-min-width
+         (if (window-live-p win)
+             (setq decknix--layout-last-sidebar-width (window-max-chars-per-line win))
+           (or decknix--layout-last-sidebar-width 48)))))
 
 (defun decknix-sidebar-layout-setup-buffer ()
   "Give the sidebar buffer its whole window width for rows.
@@ -1350,9 +1358,6 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
       (when (and decknix-sidebar-compact-team-lanes
                  (decknix--layout-attention-p state))
         (put-text-property 0 (length left) 'face 'decknix-attention-face row-str)
-        (when (string-match "\\( · \\)\\([^·]+\\)\\'" row-str)
-          (put-text-property 0 (match-end 1) 'face 'font-lock-comment-face
-                             (substring row-str (match-beginning 0))))
         (let ((rstart (- (length row-str) (length base-right))))
           (when (>= rstart 0)
             (put-text-property rstart (length row-str) 'face 'decknix-attention-face row-str)))
@@ -2483,6 +2488,16 @@ when neither the target nor the overlay has moved.  Nothing is rendered."
   "Re-mark the active row after a paint, which erases the sidebar."
   (decknix-layout-highlight-active t))
 
+(defun decknix--layout-on-window-size-change (&rest _)
+  "Trigger a sidebar repaint when the sidebar window's character width changes."
+  (when-let* ((buf (get-buffer agent-shell-workspace-sidebar-buffer-name))
+              (win (or (get-buffer-window buf) (get-buffer-window buf t))))
+    (let ((w (max decknix-sidebar-min-width (window-max-chars-per-line win))))
+      (unless (eql w decknix--layout-last-sidebar-width)
+        (setq decknix--layout-last-sidebar-width w)
+        (when (fboundp 'agent-shell-workspace-sidebar-refresh)
+          (ignore-errors (agent-shell-workspace-sidebar-refresh)))))))
+
 (define-minor-mode decknix-sidebar-active-highlight-mode
   "Highlight the sidebar row of the session shown in the selected window."
   :global t
@@ -2491,10 +2506,12 @@ when neither the target nor the overlay has moved.  Nothing is rendered."
       (progn
         (add-hook 'window-selection-change-functions #'decknix--layout-active-schedule)
         (add-hook 'window-buffer-change-functions #'decknix--layout-active-schedule)
+        (add-hook 'window-size-change-functions #'decknix--layout-on-window-size-change)
         (advice-add 'agent-shell-workspace-sidebar--render :after
                     #'decknix--layout-active-after-render))
     (remove-hook 'window-selection-change-functions #'decknix--layout-active-schedule)
     (remove-hook 'window-buffer-change-functions #'decknix--layout-active-schedule)
+    (remove-hook 'window-size-change-functions #'decknix--layout-on-window-size-change)
     (advice-remove 'agent-shell-workspace-sidebar--render
                    #'decknix--layout-active-after-render)
     (when decknix--layout-active-overlay

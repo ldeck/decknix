@@ -493,7 +493,13 @@ sidebar buffer is not live.  A render abandoned at a
 `decknix--sidebar-paint-checkpoint' is not applied at all, so the visible
 sidebar never shows half a paint."
   (let* ((target (current-buffer))
-         (win (get-buffer-window target))
+         (_ (when (and (buffer-live-p target)
+                       (with-current-buffer target display-line-numbers)
+                       (fboundp 'decknix-sidebar-layout-setup-buffer))
+              (with-current-buffer target
+                (decknix-sidebar-layout-setup-buffer))))
+         (win (or (get-buffer-window target)
+                  (get-buffer-window target t)))
          (src (get-buffer-create " *decknix-sidebar-render*")))
     (if (not (buffer-live-p target))
         (apply orig-fn args)
