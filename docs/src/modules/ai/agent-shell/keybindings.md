@@ -404,20 +404,32 @@ The title column takes the width left in the window.
 | `A` / `x` / `f` | Cycle auto-review, toggle auto-dismiss (drops Obsolete rows), toggle filters |
 | `g` / `?` | Refresh / full help |
 
-### Reading a review in Emacs (`v`)
+### Reading and editing a review in Emacs (`v`)
 
-`v` opens `*PR Review: repo#N*` for the row's PR, read-only: its summary,
-the agent's plan, the description, CI (failures first), the reviews so
-far, and every review thread grouped by file, open ones first and with
-their whole conversation. Threads are fetched page by page, so a large PR
-is never cut short. The plan is the one `/review-service-pr` saved at
+`v` opens `*PR Review: repo#N*` for the row's PR: its summary, the agent's
+staged plan, the description, CI (failures first), the reviews so far, and
+every review thread grouped by file, open ones first and with their whole
+conversation. Threads are fetched page by page, so a large PR is never cut
+short. The plan is the one `/review-service-pr` saved at
 `~/.local/state/decknix/reviews/<owner>/<repo>/<n>/plan.json` (verdict,
 body, inline comments, bot reactions), when there is one.
 
 Every `gh` call runs in the background: the buffer opens at once and each
-section fills in. `n` / `p` move between threads, `RET` opens the thread on
-GitHub, `o` the PR, `g` fetches again, `q` quits. Replying and resolving
-are later steps.
+section fills in.
+
+| Key | Action |
+|-----|--------|
+| `n` / `p` | Next / previous review thread |
+| `RET` | Open the thread at point on GitHub |
+| `o` | Open the PR on GitHub |
+| `v` | Cycle the staged plan's verdict (`APPROVE` -> `COMMENT` -> `REQUEST_CHANGES`) and sync canonical `LGTM + N inline comments` body |
+| `e` | Edit the inline comment at point, or the review body when not on an inline comment |
+| `a` | Add a new inline comment (`path:line` and body) to `plan.json` |
+| `k` / `d` | Delete the staged inline comment at point |
+| `V` | Open the interactive HTML review workbench (`canvas.html`: Before/After What/Why walkthrough, inline comments, and threads) |
+| `C-c C-c` | Submit the staged review plan via `pr-review-execute` |
+| `C-c C-k` | Cancel the staged review, optionally discard `plan.json`, and close the view |
+| `g` / `q` | Refresh / quit window |
 
 From a review session, `C-c C-b` (or `b` in its transcript) comes back to its
 row here.

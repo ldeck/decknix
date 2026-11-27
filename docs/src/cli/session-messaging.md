@@ -90,13 +90,16 @@ decknix session dispatch off
 
 `status` shows the heartbeat age, whether the receiver is on, when and by whom it was armed (`startup`, `human` or `control:<session>`), whether the control watcher runs, how many lanes the spawn cap counts against the cap (`lanes 3 of 32`, `FULL` when spawns would be refused), and how many requests are pending, queued and in flight. `on` and `off` do nothing (exit 0) when the receiver is already in that state. Without the control watcher they exit 16: only `M-x decknix-agent-dispatch-mode` can switch the receiver then. `off` lists the requests waiting in flight first; turning the receiver off settles them `not-sent`. A request to turn it on is refused when it was created before the watcher started, or while `decknix-agent-dispatch-remote-control` is nil (turning it off always works).
 
-## Scale lanes: spawn and retire
+## Scale lanes and choose an engine room: engines, spawn, send --engine, retire
 
 ```bash
-decknix session spawn --workspace ~/src/app --tag lane-07,team-a --brief-file /tmp/lane-07.md
-decknix session spawn --workspace ~/src/app --tag lane-07,team-a --mode auto -- "Pick up the parser work"
+decknix session engines
+decknix session spawn --workspace ~/src/app --tag lane-07,team-a --engine workhorse --brief-file /tmp/lane-07.md
+decknix session send lane-04,team-a --engine fast --notify -m "Rebase onto main and rerun lint"
 decknix session retire lane-07,team-a --reason "parser work merged"
 ```
+
+`decknix session engines` lists the configured engine rooms (`flagship` / `v12`, `fable` / `v10`, `workhorse` / `v8`, `fast` / `v6`, `vertex` / `v12-vertex`, `vertex-fast` / `v6-vertex`, `utility` / `v4`, `codex` / `v10-codex`, `codex-fast`, `local` / `v0`) alongside live quota usage. Passing `--engine <tier>` to `spawn` launches the lane on that provider and model; passing `--engine <tier>` to `send` switches a warm lane's model in place over ACP before delivering the prompt.
 
 `spawn` is idempotent, so re-running it is always safe:
 
