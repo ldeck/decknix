@@ -950,11 +950,21 @@ you must never be hidden by a judgement about its PR."
          (all-groups (decknix--layout-review-groups sessions items all-items))
          (attention (decknix--layout-attention-reviews sessions))
          (placed (decknix--layout-place-attention all-groups attention))
-         (split (decknix--layout-filter-groups
-                 all-groups decknix-sidebar-layout-reviews-attention-only
-                 (mapcar #'car placed)))
+         (placed-repos (mapcar #'car placed))
+         (split (if (and decknix-sidebar-compact-team-lanes
+                         decknix-sidebar-layout-reviews-attention-only
+                         (not (decknix--layout-expanded-p "reviews-held")))
+                    (let ((vis (seq-filter (lambda (g)
+                                             (or (> (or (plist-get g :asking) 0) 0)
+                                                 (member (plist-get g :repo) placed-repos)))
+                                           all-groups)))
+                      (cons vis (- (length all-groups) (length vis))))
+                  (decknix--layout-filter-groups
+                   all-groups decknix-sidebar-layout-reviews-attention-only
+                   placed-repos)))
          (groups (car split))
          (held (cdr split))
+         (held-groups (seq-remove (lambda (g) (memq g groups)) all-groups))
          (raw-keys (decknix--layout-raw-feed-keys))
          (dups (decknix--layout-duplicate-prs sessions))
          ;; PRs, not sessions.  The heading counted live review SESSIONS,
@@ -972,12 +982,22 @@ you must never be hidden by a judgement about its PR."
        'reviews)
       (setq line-num (1+ line-num))
       (dolist (group groups)
-        (let ((repo (plist-get group :repo)))
-          (insert (propertize (decknix--layout-group-label group width)
-                              'face (decknix--layout-group-face group)
-                              'decknix-layout-repo repo
-                              'decknix-layout-group group)
-                  "\n")
+        (let* ((repo (plist-get group :repo))
+               (glabel (decknix--layout-group-label group width))
+               (gface (decknix--layout-group-face group)))
+          (if (and decknix-sidebar-compact-team-lanes
+                   (eq gface 'decknix-attention-face))
+              (let ((s (propertize glabel
+                                   'decknix-layout-repo repo
+                                   'decknix-layout-group group)))
+                (when (string-match "\\` *\\([^ ]+\\)" s)
+                  (put-text-property (match-beginning 1) (match-end 1) 'face 'decknix-attention-face s))
+                (insert s "\n"))
+            (insert (propertize glabel
+                                'face gface
+                                'decknix-layout-repo repo
+                                'decknix-layout-group group)
+                    "\n"))
           (setq line-num (1+ line-num))
           (dolist (session (cdr (assoc repo placed)))
             (setq line-num (decknix--layout-render-attention-session
@@ -1027,12 +1047,23 @@ you must never be hidden by a judgement about its PR."
                     (setq line-num (decknix--layout-render-subagents
                                     line-num (nth 0 cs) width)))))))))
       (when (> held 0)
-        (insert (propertize
-                 (format " ·  %d more in flight, nothing waiting" held)
-                 'face 'font-lock-comment-face
-                 'decknix-layout-held held)
-                "\n")
-        (setq line-num (1+ line-num)))
+        (let* ((doing (apply #'+ (mapcar (lambda (g) (or (plist-get g :doing) 0)) held-groups)))
+               (stale (apply #'+ (mapcar (lambda (g) (or (plist-get g :updated) 0)) held-groups)))
+               (queued (apply #'+ (mapcar (lambda (g) (or (plist-get g :uncovered) 0)) held-groups)))
+               (parts (delq nil
+                            (list (and (> doing 0) (format "%d in progress" doing))
+                                  (and (> stale 0) (format "%d stale" stale))
+                                  (and (> queued 0) (format "%d queued" queued)))))
+               (summary (if (and decknix-sidebar-compact-team-lanes parts)
+                            (format " ▸  %s" (string-join parts " · "))
+                          (format " ·  %d more in flight, nothing waiting" held))))
+          (insert (propertize summary
+                              'face 'font-lock-comment-face
+                              'decknix-layout-held held
+                              'decknix-layout-expand-key "reviews-held"
+                              'help-echo "RET or TAB to show all review repos")
+                  "\n")
+          (setq line-num (1+ line-num))))
       (when dups
         (insert (propertize (format " ⚠  %d PRs have 2+ sessions" (length dups))
                             'face 'error
@@ -1306,13 +1337,28 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
     ;; Coloured by state as well as worded: the glyph and colour carry it
     ;; even where a narrow window truncates the name.
     (let ((row-str (propertize (decknix--layout-fit-row left name right width)
-                               'face (decknix--layout-state-face state)
+                               'face (if (and decknix-sidebar-compact-team-lanes
+                                              (decknix--layout-attention-p state))
+                                         'bold
+                                       (decknix--layout-state-face state))
                                'decknix-layout-session session
                                'decknix-layout-buffer (nth 0 session)
                                ;; The property upstream's goto, kill and
                                ;; rename read.  Without it RET on a WIP row
                                ;; said "No live agent buffer at point".
                                'agent-shell-workspace-buffer sbuf)))
+      (when (and decknix-sidebar-compact-team-lanes
+                 (decknix--layout-attention-p state))
+        (put-text-property 0 (length left) 'face 'decknix-attention-face row-str)
+        (when (string-match "\\( · \\)\\([^·]+\\)\\'" row-str)
+          (put-text-property 0 (match-end 1) 'face 'font-lock-comment-face
+                             (substring row-str (match-beginning 0))))
+        (let ((rstart (- (length row-str) (length base-right))))
+          (when (>= rstart 0)
+            (put-text-property rstart (length row-str) 'face 'decknix-attention-face row-str)))
+        (when (string-match " \\([0-9]+×[^ ]+ · \\)" row-str)
+          (put-text-property (match-beginning 1) (match-end 1)
+                             'face 'font-lock-comment-face row-str)))
       (when (and parent-tags (string-match "lane-\\([0-9][0-9]\\)" row-str))
         (put-text-property (match-beginning 1) (match-end 1)
                            'face (decknix--layout-lane-pill-face (match-string 1 row-str))
@@ -1434,14 +1480,21 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
                                    (if eng (format " [%s]" eng) "")
                                    (if counts (concat counts " · ") "")
                                    (decknix--layout-session-status sess))))
-                 (cons (cons (format "lane-%s%s" code (if eng (format " [%s]" eng) "")) buf)
-                       (propertize code
-                                   'face (decknix--layout-lane-pill-face code)
-                                   'agent-shell-workspace-buffer buf
-                                   'decknix-layout-session sess
-                                   'decknix-layout-buffer (nth 0 sess)
-                                   'decknix-layout-group-id group-id
-                                   'help-echo tip))))
+                 (let* ((st (nth 3 sess))
+                        (suffix (cond ((decknix--layout-attention-p st)
+                                       (propertize "⚑" 'face 'decknix-attention-face))
+                                      ((equal st "working")
+                                       (propertize "◐" 'face '(:foreground "#7dcfff")))
+                                      (t "")))
+                        (chip (concat (propertize code 'face (decknix--layout-lane-pill-face code))
+                                      suffix)))
+                   (cons (cons (format "lane-%s%s" code (if eng (format " [%s]" eng) "")) buf)
+                         (propertize chip
+                                     'agent-shell-workspace-buffer buf
+                                     'decknix-layout-session sess
+                                     'decknix-layout-buffer (nth 0 sess)
+                                     'decknix-layout-group-id group-id
+                                     'help-echo tip)))))
              sorted))
            (choices (delq nil (mapcar (lambda (p) (and (cdar p) (car p))) pills)))
            (chunks (seq-partition (mapcar #'cdr pills) 8))
@@ -1582,23 +1635,39 @@ collapsed team still lists any lane blocked on the user."
       (setq line-num (1+ line-num)))
      ((and decknix-sidebar-compact-team-lanes
            (not (eq decknix-sidebar-wip-detail-mode 'all)))
-      (let ((prominent (seq-filter (lambda (l) (decknix--layout-prominent-lane-p (car l))) lanes)))
-        (dolist (lane prominent)
-          (let ((lstart (point)))
-            (setq line-num (decknix--layout-render-wip-session
-                            line-num (- width 2)
-                            (if (eq decknix-sidebar-wip-detail-mode 'actionable)
-                                (plist-put (copy-sequence (car lane)) :repos nil)
-                              (car lane))
-                            nil coord-tags key))
-            (decknix--layout-indent-lines lstart (point) "  "
-                                          (if (eq (cdr lane) 'inferred)
-                                              (propertize " ~" 'decknix-layout-guess 'inferred)
-                                            "  "))))
-        (when (eq decknix-sidebar-wip-detail-mode 'actionable)
-          (dolist (tclaim (decknix--layout-merge-team-claims lanes t))
-            (setq line-num (decknix--layout-render-claim-1
-                            line-num width tclaim (plist-get tclaim :session) 'observed))))))
+      (setq line-num (decknix--layout-render-lane-pills line-num lanes key))
+      (dolist (lane lanes)
+        (let* ((lrow (car lane))
+               (lsess (plist-get lrow :session))
+               (lstate (nth 3 lsess))
+               (lbuf (decknix--layout-session-buffer lsess)))
+          (when (decknix--layout-attention-p lstate)
+            (let* ((ask (decknix-layout-session-ask lbuf lstate))
+                   (hint (decknix-layout-session-reply-hint lbuf))
+                   (badge (decknix--layout-lane-badge lsess))
+                   (age (and lbuf (decknix-attention-age-label (decknix-attention-since lbuf))))
+                   (lead (concat (propertize "     ↳ " 'face 'font-lock-comment-face)
+                                 badge " "
+                                 (propertize "⚑ " 'face 'decknix-attention-face)))
+                   (body (concat (or ask (decknix--layout-session-status lsess))
+                                 (if hint (concat " · reply " hint) "")
+                                 (if age (concat " (" age ")") "")))
+                   (room (max 1 (- width (string-width lead))))
+                   (trimmed (if (> (string-width body) room)
+                                (concat (truncate-string-to-width body (max 1 (1- room))) "…")
+                              body)))
+              (insert (propertize (concat lead (propertize trimmed 'face 'font-lock-comment-face))
+                                  'decknix-layout-ask lsess
+                                  'decknix-layout-session lsess
+                                  'decknix-layout-buffer (nth 0 lsess)
+                                  'agent-shell-workspace-buffer lbuf
+                                  'decknix-layout-group-id key)
+                      "\n")
+              (setq line-num (1+ line-num))))))
+      (when (eq decknix-sidebar-wip-detail-mode 'actionable)
+        (dolist (tclaim (decknix--layout-merge-team-claims lanes t))
+          (setq line-num (decknix--layout-render-claim-1
+                          line-num width tclaim (plist-get tclaim :session) 'observed)))))
      (t
       (dolist (lane lanes)
         (let ((lstart (point)))
@@ -1695,10 +1764,10 @@ Both are replaced, never mutated, when their data changes."
 
 (defconst decknix-sidebar-layout-ship-queue-faces
   '((failed . (:foreground "#ff5f5f" :weight bold))
-    (ready  . (:foreground "#ffaf5f" :weight bold))
-    (merge  . (:foreground "#ffaf5f" :weight bold))
-    (close  . (:foreground "#ffaf5f")))
-  "Face per ship queue group: red failed, amber waiting on you.")
+    (ready  . (:foreground "#7dcfff"))
+    (merge  . (:foreground "#73daca"))
+    (close  . font-lock-comment-face))
+  "Face per ship queue group: red failed, sky-blue promote, teal merge, dim close.")
 
 (defun decknix--layout-jira-url (key)
   "Return Jira issue KEY's URL from the hub's task feed, or nil."
@@ -1992,20 +2061,27 @@ PROVENANCE marks whether this association is evidence or a guess."
          (shown-wts (nth 1 split))
          (held (nth 2 split)))
     (ignore prs wts)
-    (insert (propertize (concat left (make-string pad ?\s) right)
-                        'face (if (eq provenance 'observed)
-                                  (decknix--layout-severity-face
-                                   (plist-get claim :severity))
-                                ;; A guess must not compete with what the
-                                ;; sidebar actually knows.
-                                (decknix--layout-provenance-face provenance))
-                        'decknix-layout-claim claim
-                        'decknix-layout-expand-key expand-key
-                        'decknix-layout-provenance provenance
-                        'decknix-layout-session session
-                        'agent-shell-workspace-buffer
-                        (and session (decknix--layout-session-buffer session)))
-            "\n")
+    (let* ((sev (plist-get filtered-claim :severity))
+           (base-face (cond ((not (eq provenance 'observed))
+                             (decknix--layout-provenance-face provenance))
+                            ((and decknix-sidebar-compact-team-lanes
+                                  (not (eql sev 0)))
+                             'default)
+                            (t (decknix--layout-severity-face sev))))
+           (hdr (propertize (concat left (make-string pad ?\s) right)
+                            'face base-face
+                            'decknix-layout-claim claim
+                            'decknix-layout-expand-key expand-key
+                            'decknix-layout-provenance provenance
+                            'decknix-layout-session session
+                            'agent-shell-workspace-buffer
+                            (and session (decknix--layout-session-buffer session)))))
+      (when (and decknix-sidebar-compact-team-lanes (eq provenance 'observed) (not (eql sev 0)))
+        (when (string-match "⇡" hdr)
+          (put-text-property (match-beginning 0) (match-end 0) 'face '(:foreground "#7dcfff") hdr))
+        (put-text-property (- (length hdr) (length right)) (length hdr)
+                           'face 'font-lock-comment-face hdr))
+      (insert hdr "\n"))
     (setq line-num (1+ line-num))
     (let* ((lines-of (mapcar (lambda (pr) (cons pr (decknix--layout-pr-ship-info pr)))
                              shown-prs))
@@ -2091,21 +2167,24 @@ repeating it under every fold was most of the section.  Returns LINE-NUM."
                        (if (string-empty-p flags) "" (concat " " flags))
                        (or (plist-get lines :current) "")))
          (text (truncate-string-to-width text width nil nil "…")))
-    (insert (propertize text
-                        'face (if (eq (plist-get first :visibility) 'shipped)
-                                  'font-lock-comment-face
-                                (decknix--layout-severity-face
-                                 (decknix--layout-pr-severity first)))
-                        'decknix-layout-expand-key key
-                        'help-echo (concat (mapconcat (lambda (p) (format "#%s" (plist-get p :number)))
-                                                      prs " ")
-                                           "\n" (substring-no-properties
-                                                  (decknix-ship-label-full (plist-get first :ship)))
-                                           (let ((note (decknix--layout-ship-stale-note
-                                                        (plist-get first :ship) (float-time))))
-                                             (if note (format " (%s)" note) ""))
-                                           "\nTAB or RET to list them"))
-            "\n")
+    (let* ((sev (decknix--layout-pr-severity first))
+           (fface (cond ((eq (plist-get first :visibility) 'shipped)
+                         'font-lock-comment-face)
+                        ((and decknix-sidebar-compact-team-lanes (not (eql sev 0)))
+                         '(:foreground "#7dcfff"))
+                        (t (decknix--layout-severity-face sev)))))
+      (insert (propertize text
+                          'face fface
+                          'decknix-layout-expand-key key
+                          'help-echo (concat (mapconcat (lambda (p) (format "#%s" (plist-get p :number)))
+                                                        prs " ")
+                                             "\n" (substring-no-properties
+                                                    (decknix-ship-label-full (plist-get first :ship)))
+                                             (let ((note (decknix--layout-ship-stale-note
+                                                          (plist-get first :ship) (float-time))))
+                                               (if note (format " (%s)" note) ""))
+                                             "\nTAB or RET to list them"))
+              "\n"))
     (setq line-num (1+ line-num))
     (when open
       (dolist (pr prs)
