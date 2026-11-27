@@ -197,9 +197,21 @@ screen.  The number held back is always reported.")
   :group 'decknix)
 
 (defcustom decknix-sidebar-compact-team-lanes nil
-  "When non-nil, collapse idle team lanes into a `lanes: [01][02]...' pill strip and consolidate team repos beneath."
+  "When non-nil, collapse idle team lanes into a `lanes: 01 02...' pill strip and consolidate team repos beneath."
   :type 'boolean
   :group 'decknix)
+
+(defcustom decknix-sidebar-use-nerd-icons nil
+  "When non-nil, use 1-cell Nerd Font Mono icons for Git repos, branches, ship queue, and vendor tasks."
+  :type 'boolean
+  :group 'decknix)
+
+(defun decknix--layout-nerd-icon (char &optional fg weight)
+  "Return 1-cell Nerd Font Mono icon string for CHAR, optionally with FG and WEIGHT."
+  (let ((spec (append '(:family "JetBrainsMono Nerd Font Mono")
+                      (when fg (list :foreground fg))
+                      (when weight (list :weight weight)))))
+    (propertize (string char) 'face spec 'font-lock-face spec)))
 
 (defun decknix-layout-toggle-compact-team-lanes ()
   "Toggle compact `lanes: [01][02]...' strip for coordinator teams."
@@ -1568,22 +1580,29 @@ When ACTIONABLE-ONLY is non-nil, drop already-shipped PRs and clean worktrees."
                     (unless (seq-find (lambda (ew) (equal (plist-get ew :path) (plist-get w :path)))
                                       (plist-get cur :wt-items))
                       (plist-put cur :wt-items (append (plist-get cur :wt-items) (list w))))))))))))
-    (delq nil
-          (mapcar
-           (lambda (cell)
-             (let* ((c (cdr cell))
-                    (prs (plist-get c :pr-items))
-                    (wts (plist-get c :wt-items)))
-               (when (or prs wts)
-                 (list :repo (plist-get c :repo)
-                       :raw-repo (plist-get c :repo)
-                       :prs (length prs)
-                       :worktrees (length wts)
-                       :pr-items prs
-                       :wt-items wts
-                       :severity (decknix--layout-worst-severity prs wts)
-                       :session (plist-get c :session)))))
-           (nreverse by-repo)))))
+    (sort
+     (delq nil
+           (mapcar
+            (lambda (cell)
+              (let* ((c (cdr cell))
+                     (prs (plist-get c :pr-items))
+                     (wts (plist-get c :wt-items)))
+                (when (or prs wts)
+                  (list :repo (plist-get c :repo)
+                        :raw-repo (plist-get c :repo)
+                        :prs (length prs)
+                        :worktrees (length wts)
+                        :pr-items prs
+                        :wt-items wts
+                        :severity (decknix--layout-worst-severity prs wts)
+                        :session (plist-get c :session)))))
+            (nreverse by-repo)))
+     (lambda (a b)
+       (let ((sa (or (plist-get a :severity) 4))
+             (sb (or (plist-get b :severity) 4)))
+         (if (/= sa sb)
+             (< sa sb)
+           (> (or (plist-get a :prs) 0) (or (plist-get b :prs) 0))))))))
 
 (defun decknix--layout-team-scale-summary (session lanes)
   "Return right-hand summary for coordinator SESSION and its LANES.
@@ -1799,9 +1818,21 @@ or TAB on a group lists its PRs; RET on a ticket offers its actions."
                  (ticket (and close (substring (plist-get g :label) (length "close "))))
                  (open (decknix--layout-expanded-p gkey))
                  (now (float-time))
-                 (text (concat "  " (decknix--layout-ship-queue-text g (- width 2)))))
+                 (raw-text (string-trim-left (decknix--layout-ship-queue-text g (- width 5))))
+                 (icon-prefix
+                  (if decknix-sidebar-use-nerd-icons
+                      (if close
+                          (concat "   " (decknix--layout-nerd-icon #xe75c "#2684ff") " ")
+                        (concat "   " (decknix--layout-nerd-icon #xf427 "#7dcfff") " "))
+                    "  "))
+                 (body-text
+                  (if (and decknix-sidebar-use-nerd-icons close
+                           (string-prefix-p "close " raw-text))
+                      (substring raw-text (length "close "))
+                    raw-text))
+                 (text (concat icon-prefix body-text)))
             ;; Appended, so the stale `?' keeps its grey under the group's colour.
-            (add-face-text-property 0 (length text)
+            (add-face-text-property (length icon-prefix) (length text)
                                     (alist-get (plist-get g :kind) decknix-sidebar-layout-ship-queue-faces)
                                     t text)
             (insert (apply #'propertize
@@ -1963,18 +1994,21 @@ The title is truncated rather than allowed to push the glyphs out of the
 window, since the glyphs are the part worth keeping when space runs out."
   (let* ((raw (plist-get pr :pr))
          (merged (plist-get pr :ship))
-         (icons (concat (decknix--hub-author-icon raw)
-                        (decknix--hub-primary-status-icon raw 'wip)
-                        (decknix--hub-approved-icon raw)
-                        (decknix--hub-changes-icon raw)
-                        (decknix--hub-conflict-icon raw)
-                        (decknix--hub-stale-approval-icon raw)
-                        (decknix--hub-unresolved-icon raw)
-                        ;; A merged PR's threads are history: `↩' there
-                        ;; asked for a reply nobody owes any more.
-                        (if merged "" (decknix--hub-reply-icon raw))
-                        (decknix--hub-discussion-icon raw)
-                        (decknix--hub-activity-icons raw)))
+         (compact decknix-sidebar-compact-team-lanes)
+         (icons (if (and compact merged)
+                    (decknix--hub-primary-status-icon raw 'wip)
+                  (concat (if compact "" (decknix--hub-author-icon raw))
+                          (decknix--hub-primary-status-icon raw 'wip)
+                          (decknix--hub-approved-icon raw)
+                          (decknix--hub-changes-icon raw)
+                          (decknix--hub-conflict-icon raw)
+                          (decknix--hub-stale-approval-icon raw)
+                          (decknix--hub-unresolved-icon raw)
+                          ;; A merged PR's threads are history: `↩' there
+                          ;; asked for a reply nobody owes any more.
+                          (if merged "" (decknix--hub-reply-icon raw))
+                          (decknix--hub-discussion-icon raw)
+                          (decknix--hub-activity-icons raw))))
          (ship merged)
          (shipped (eq (plist-get pr :visibility) 'shipped))
          ;; A merged PR's age says nothing; where it is in the pipeline is
@@ -1983,11 +2017,16 @@ window, since the glyphs are the part worth keeping when space runs out."
                     (ship (decknix-ship-label ship))
                     (t (decknix--hub-format-age (alist-get 'updated raw)))))
          (lbadge (plist-get pr :lane-badge))
-         (lead (concat (format "    %s %-3s " icons age)
+         (indent (if compact "   " "    "))
+         (age-fmt (if compact "%s" "%-3s"))
+         (lead (concat (format (concat "%s%s " age-fmt " ") indent icons age)
                        (if lbadge (concat lbadge " ") "")
                        (format "#%s " (plist-get pr :number))))
          (room (max 1 (- width (string-width lead))))
-         (title (decknix--layout-item-title pr))
+         (raw-title (decknix--layout-item-title pr))
+         (title (if compact
+                    (replace-regexp-in-string "\\`\\([A-Z]+-[0-9]+\\): +" "\\1 " raw-title)
+                  raw-title))
          (title (if (> (string-width title) room)
                     (concat (truncate-string-to-width title (max 1 (1- room))) "…")
                   title))
@@ -2036,8 +2075,12 @@ session.  Keeps the sharing visible without repeating the whole subtree."
 PROVENANCE marks whether this association is evidence or a guess."
   (let* ((prs (plist-get claim :pr-items))
          (wts (plist-get claim :wt-items))
-         (left (format "   %s⇡ %s"
+         (repo-glyph (if decknix-sidebar-use-nerd-icons
+                         (decknix--layout-nerd-icon #xe702 "#f7768e")
+                       "⇡"))
+         (left (format "  %s%s %s"
                        (decknix--layout-provenance-mark provenance)
+                       repo-glyph
                        (plist-get claim :repo)))
          (expand-key (concat "items:" (or (plist-get claim :repo) "")))
          (filtered-claim
@@ -2082,8 +2125,12 @@ PROVENANCE marks whether this association is evidence or a guess."
                             'agent-shell-workspace-buffer
                             (and session (decknix--layout-session-buffer session)))))
       (when (and decknix-sidebar-compact-team-lanes (eq provenance 'observed) (not (eql sev 0)))
-        (when (string-match "⇡" hdr)
+        (when (and (not decknix-sidebar-use-nerd-icons) (string-match "⇡" hdr))
           (put-text-property (match-beginning 0) (match-end 0) 'face '(:foreground "#7dcfff") hdr))
+        (when (and decknix-sidebar-use-nerd-icons (string-match (string #xe702) hdr))
+          (put-text-property (match-beginning 0) (match-end 0)
+                             'face '(:family "JetBrainsMono Nerd Font Mono" :foreground "#f7768e")
+                             hdr))
         (put-text-property (- (length hdr) (length right)) (length hdr)
                            'face 'font-lock-comment-face hdr))
       (insert hdr "\n"))
@@ -2294,9 +2341,25 @@ costs no network; an absent file renders nothing rather than a guess."
         (setq line-num (1+ line-num)))
       (let ((now (current-time)))
         (dolist (account accounts)
-          (dolist (line (decknix--layout-quota-lines account now width))
-            (insert (propertize line 'decknix-layout-quota account) "\n")
-            (setq line-num (1+ line-num)))))))
+          (let* ((lines (decknix--layout-quota-lines account now width))
+                 (worst (decknix--layout-quota-worst account))
+                 (has-err (alist-get 'error account))
+                 (note (alist-get 'note account)))
+            (if (and decknix-sidebar-compact-team-lanes
+                     (not has-err)
+                     (< worst 80)
+                     note
+                     (car lines))
+                (let ((main (copy-sequence (car lines))))
+                  (put-text-property 0 (length main) 'face 'success main)
+                  (insert (propertize main
+                                      'decknix-layout-quota account
+                                      'help-echo note)
+                          "\n")
+                  (setq line-num (1+ line-num)))
+              (dolist (line lines)
+                (insert (propertize line 'decknix-layout-quota account) "\n")
+                (setq line-num (1+ line-num)))))))))
   line-num)
 
 ;; --- legend -------------------------------------------------------------

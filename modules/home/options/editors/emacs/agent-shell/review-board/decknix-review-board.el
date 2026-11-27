@@ -1792,12 +1792,12 @@ Their saved conversation records stay on disk, so a future push resumes them."
   :type 'boolean
   :group 'decknix-review-board)
 
-(defcustom decknix-review-board-reap-obsolete-after 1800
+(defcustom decknix-review-board-reap-obsolete-after 60
   "Quiet seconds before an idle auto-review session on an obsolete PR is quit."
   :type 'integer
   :group 'decknix-review-board)
 
-(defcustom decknix-review-board-reap-posted-after 7200
+(defcustom decknix-review-board-reap-posted-after 1800
   "Quiet seconds before an idle auto-review session that posted its review is quit."
   :type 'integer
   :group 'decknix-review-board)

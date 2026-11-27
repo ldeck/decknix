@@ -5057,7 +5057,8 @@ ${optionalString cfg.tableOverlay.enable ''
         (setq decknix-sidebar-wip-detail-mode 'actionable
               decknix-sidebar-strip-coordinator-tags t
               decknix-sidebar-show-engine-badge t
-              decknix-sidebar-compact-team-lanes t)
+              decknix-sidebar-compact-team-lanes t
+              decknix-sidebar-use-nerd-icons t)
         (unless (file-readable-p decknix--layout-state-file)
           (puthash "wip-collapsed:unattended" t decknix--layout-expanded)
           (puthash "wip-collapsed:tasks:pick-up" t decknix--layout-expanded))
