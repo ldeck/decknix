@@ -163,6 +163,7 @@
                 # pin's release for its `agy acp' server (pkgs/antigravity-cli).
                 overlays = [ (_: _: {
                   inherit (currentPkgs) claude-code pi-coding-agent tabularis omniwm goose-cli qwen-code llama-cpp;
+                  rustPlatformCurrent = currentPkgs.rustPlatform;
                   gemini-cli = currentPkgs.callPackage ./pkgs/gemini-cli/default.nix { };
                   antigravity-cli = currentPkgs.callPackage ./pkgs/antigravity-cli/default.nix { };
                   # Codex and its ACP bridge (pkgs/codex-acp) are absent on
