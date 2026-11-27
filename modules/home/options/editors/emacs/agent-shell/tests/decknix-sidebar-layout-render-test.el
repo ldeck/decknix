@@ -1282,7 +1282,7 @@ hides one silently; Reviews and WIP list only the board's sessions."
        (list (cons '(:session ("*Claude: lane-01*" nil ("lane-01") "ready" "/c" nil) :repos nil) 'observed)
              (cons '(:session ("*Claude: lane-02*" nil ("lane-02") "ready" "/c" nil) :repos nil) 'observed))
        "team:coord")
-      (should (string-match-p "lanes: 01, 02" (buffer-string)))
+      (should (string-match-p "lanes: 01 02" (buffer-string)))
       (should (plist-get (decknix--layout-lane-pill-face "02") :background))))
   (let ((decknix-sidebar-compact-team-lanes t)
         (decknix-sidebar-show-engine-badge t))

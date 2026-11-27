@@ -1498,7 +1498,7 @@ Returns LINE-NUM.  RIGHT replaces the state word on the right."
              sorted))
            (choices (delq nil (mapcar (lambda (p) (and (cdar p) (car p))) pills)))
            (chunks (seq-partition (mapcar #'cdr pills) 8))
-           (sep (propertize ", " 'face 'font-lock-comment-face))
+           (sep " ")
            (first t))
       (dolist (chunk chunks)
         (let ((prefix (if first "   lanes: " "          "))
